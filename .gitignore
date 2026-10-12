@@ -1,0 +1,41 @@
+# --- Secrets ---
+# backend/.env holds JWT_SECRET, OAuth client secrets and the Mongo URI.
+# Keep .env.example in the repo instead, so a new machine knows what to set.
+.env
+.env.*
+!.env.example
+
+# --- Dependencies ---
+venv/
+.venv/
+node_modules/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Build output ---
+dist/
+build/
+
+# --- Runtime, not source ---
+logs/
+*.log
+
+# Local vector stores. Customer documents live here; they must never be
+# committed, and the server-side one should not exist at all any more.
+chroma_db/
+chroma/
+*.sqlite3
+
+# Generated audio from the text-to-speech endpoint.
+audio/
+*.mp3
+
+# --- Editors and OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
