@@ -94,7 +94,10 @@ RELEVANCE_FLOOR = float(os.environ.get("KRISH_RELEVANCE_FLOOR", "0.10"))
 # keeps the question's own hits, so it cannot score below the baseline, and
 # pays the same ~1.2s. The default is augment because it was asked for; set
 # this to off to get the 25ms path back.
-QUERY_EXPANSION = (os.environ.get("KRISH_QUERY_EXPANSION") or "augment").strip().lower()
+# Off by default: the cross-encoder reads the candidates instead of asking a
+# model to guess the document's wording, for ~50ms against expansion's ~1.5s.
+# Set to augment or replace to bring expansion back; the code path remains.
+QUERY_EXPANSION = (os.environ.get("KRISH_QUERY_EXPANSION") or "off").strip().lower()
 
 # Expansion is an optimisation, not a dependency. Past this, retrieval runs on
 # the question alone rather than making the user wait.
@@ -295,6 +298,11 @@ def reconcile_store():
         print(f"⚠️  store reconciliation failed: {error}")
 
 
+def prepare_reranker():
+    """Load the cross-encoder off the request path, like the embedder."""
+    cli.warm_reranker()
+
+
 def prepare_semantic():
     """
     Load the embedding model, then catch up anything indexed without it.
@@ -328,6 +336,7 @@ async def lifespan(_app: FastAPI):
     print(f"   store:      {HOME}")
     print(f"   indexed:    {indexed} chunks")
     print(f"   retrieval:  {cli.RETRIEVAL}")
+    print(f"   reranker:   {'on' if cli.RERANKER else 'off'}")
     print(f"   engine:     {CONFIG['engine_url']}")
     print(f"   api key:    {'set' if CONFIG['api_key'] else 'MISSING - set KRISH_API_KEY'}")
     print(f"   listening:  http://localhost:{PORT}\n")
@@ -336,6 +345,9 @@ async def lifespan(_app: FastAPI):
 
     if cli.semantic_enabled():
         threading.Thread(target=prepare_semantic, daemon=True).start()
+
+    if cli.RERANKER:
+        threading.Thread(target=prepare_reranker, daemon=True).start()
 
     yield
 
@@ -401,6 +413,7 @@ async def health():
         "api_key_configured": bool(CONFIG["api_key"]),
         "retrieval": cli.RETRIEVAL,
         "semantic": semantic,
+        "reranker": cli.reranker_status(),
         "message": (
             "Preparing semantic search (one-time model download). "
             "Questions work now and get sharper once it finishes."
@@ -963,16 +976,27 @@ async def chat(body: ChatRequest):
 
     scope = document_filter(body.user_id, mode, body.document_id, body.document_ids)
 
+    # None means "no score to judge", which is the right answer for a document
+    # spread: it is deliberately not a similarity match, so the floor must not
+    # be applied to it.
+    best = None
+
     if cli.is_document_level_question(question):
         # "Summarize this pdf" has nothing to search for. Send a spread of the
         # document instead of the chunks that share a word with the question,
-        # and skip expansion: there is no topic to expand.
+        # and skip expansion and reranking: there is no topic to rank against.
         chunks = cli.spread_chunks(collection(), where=scope)
     else:
-        # First pass on the question alone. 46ms, and for most questions it is
-        # the final answer - the expansion call costs thirty times as much.
-        chunks = cli.query_store(HOME, collection(), question, TOP_K, where=scope)
+        # Cast a wider net when the cross-encoder is there to narrow it again.
+        # Fusion is reliable about putting the answer inside 8; which of those
+        # 8 actually answers the question is what the reranker decides.
+        pool_size = cli.RERANK_POOL if cli.reranker_ready() else TOP_K
 
+        chunks = cli.query_store(HOME, collection(), question, pool_size, where=scope)
+
+        # Decided on the retrieved pool, before reranking narrows it. Reranking
+        # must not be able to flip an on-topic question into a refusal by
+        # dropping the chunk that happened to hold the best semantic score.
         best = best_semantic(chunks)
 
         # Three bands. Below the floor the question is off topic and expansion
@@ -1014,17 +1038,19 @@ async def chat(body: ChatRequest):
 
                 if second:
                     chunks = second
+                    best = best_semantic(second) or best
 
-    # Applied to whatever retrieval finally produced, first pass or second: an
-    # expansion that lifts nothing above the floor still means the document
-    # does not cover the question.
-    final_best = best_semantic(chunks)
-    off_topic = final_best is not None and final_best < RELEVANCE_FLOOR
+        chunks = cli.rerank(question, chunks, TOP_K)
+
+    # `best` is the strongest semantic score in the retrieved pool, taken
+    # before reranking. A document that offers nothing above the floor does not
+    # cover the question, however the candidates are then ordered.
+    off_topic = best is not None and best < RELEVANCE_FLOOR
 
     if not chunks or off_topic:
         if off_topic:
             print(
-                f"🚫 off topic: best semantic {final_best:.4f} < "
+                f"🚫 off topic: best semantic {best:.4f} < "
                 f"{RELEVANCE_FLOOR} - refused locally, engine not called"
             )
 

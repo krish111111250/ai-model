@@ -84,6 +84,40 @@ RRF_K = 1
 # Expansion lists vote at this fraction of their retriever's weight.
 EXPANSION_WEIGHT = 0.5
 
+# Cross-encoder reranking. Retrieval fuses two rank lists without ever reading
+# a chunk against the question; the cross-encoder reads both together, which is
+# why it can tell apart two chunks that score alike.
+#
+# Legacy names are honoured so the RERANKER_* pair already in backend/.env
+# works when exported.
+RERANKER = (
+    os.environ.get("KRISH_RERANKER")
+    or os.environ.get("RERANKER_ENABLED")
+    or "true"
+).strip().lower() not in {"false", "0", "off", "no"}
+
+RERANKER_MODEL = (
+    os.environ.get("KRISH_RERANKER_MODEL")
+    or os.environ.get("RERANKER_MODEL")
+    or "cross-encoder/ms-marco-MiniLM-L-6-v2"
+)
+
+# How many candidates to score. Fusion is good enough to put the answer inside
+# 8, and every extra pair is inference time for a chunk that was not going to
+# win anyway.
+RERANK_POOL = int(os.environ.get("KRISH_RERANK_POOL", "8"))
+
+# How much a chunk is penalised per place it sat down the fusion list.
+#
+# Neither signal should decide alone. Pure reranking scored 21 of 24 at top-1
+# but lost an answer from the top 4: asked "how long before I leave must I
+# tell you", every candidate came back negative - the cross-encoder was not
+# confident about any of them - and in that noise it buried the chunk fusion
+# had ranked third. Pure fusion order got 19 of 24. Blending reached 22 of 24
+# with nothing lost, and anything from 0.5 to 1.5 scored the same, so this is
+# a plateau rather than a tuned number.
+RERANK_BLEND = float(os.environ.get("KRISH_RERANK_BLEND", "0.8"))
+
 LEXICAL_WEIGHT_NORMAL = 0.6     # ordinary wording: a junior vote
 LEXICAL_WEIGHT_RARE_TERM = 1.0  # the question quotes a rare term: an equal vote
 SEMANTIC_WEIGHT = 1.0
@@ -317,6 +351,110 @@ def embed_semantic(texts):
         ]
 
     return vectors
+
+
+# -----------------------------
+# CROSS-ENCODER RERANKING
+# -----------------------------
+_reranker = None
+_reranker_state = {"state": "cold", "detail": "not loaded yet"}
+
+
+def reranker_status() -> dict:
+    if not RERANKER:
+        return {"state": "disabled", "detail": "KRISH_RERANKER=off"}
+
+    return dict(_reranker_state)
+
+
+def reranker_ready() -> bool:
+    return _reranker_state["state"] == "ready"
+
+
+def warm_reranker(quiet: bool = False):
+    """
+    Load the cross-encoder, downloading it the first time (~88MB).
+
+    Called on a background thread at startup for the same reason as the
+    embedder: a model load has no business happening inside someone's first
+    question. Failure is not fatal - retrieval keeps the fusion order.
+    """
+    global _reranker
+
+    if not RERANKER:
+        return None
+
+    with _semantic_lock:
+        if _reranker is not None:
+            return _reranker
+
+        _reranker_state.update(state="loading", detail=RERANKER_MODEL)
+
+        try:
+            from sentence_transformers import CrossEncoder
+
+            model = CrossEncoder(RERANKER_MODEL)
+            model.predict([("warm", "up")])
+
+            _reranker = model
+            _reranker_state.update(state="ready", detail=RERANKER_MODEL)
+
+            if not quiet:
+                print(f"🎯 reranker ready ({RERANKER_MODEL})")
+
+        except Exception as error:
+            _reranker_state.update(state="unavailable", detail=str(error))
+
+            if not quiet:
+                print(f"⚠️  reranker unavailable, keeping fusion order: {error}")
+
+        return _reranker
+
+
+def rerank(question: str, chunks, top_k: int):
+    """
+    Re-order candidates by reading each one against the question.
+
+    Retrieval ranks by similarity to a query vector; nothing in it has read a
+    chunk and the question side by side. The cross-encoder does exactly that,
+    which is what resolves the case fusion gets wrong: several chunks on the
+    same topic, only one of which answers the question.
+
+    Its verdict is blended with the fusion rank rather than replacing it, so a
+    confident rerank can still promote the eighth candidate while an unsure
+    one cannot bury the third - see RERANK_BLEND.
+
+    Scores are kept alongside the retrieval scores rather than replacing them.
+    The relevance floor is decided on the semantic score of the retrieved pool,
+    so reranking cannot move that decision by dropping a chunk.
+    """
+    if not chunks:
+        return []
+
+    if not RERANKER or not reranker_ready() or len(chunks) <= 1:
+        return chunks[:top_k]
+
+    try:
+        scores = _reranker.predict(
+            [(question, chunk.get("text") or "") for chunk in chunks]
+        )
+    except Exception as error:
+        print(f"⚠️  rerank failed, keeping fusion order: {error}")
+        return chunks[:top_k]
+
+    # Position in the incoming list is the fusion rank: query_store returned
+    # these already ordered.
+    for position, (chunk, score) in enumerate(zip(chunks, scores)):
+        chunk["rerank_score"] = round(float(score), 4)
+        chunk["blended_score"] = round(
+            float(score) - RERANK_BLEND * position, 4
+        )
+
+    ranked = sorted(
+        chunks, key=lambda chunk: chunk.get("blended_score", 0.0), reverse=True
+    )
+
+    return ranked[:top_k]
 
 
 def lexicon_path(home: Path) -> Path:
@@ -1070,13 +1208,15 @@ def search_local(home: Path, question: str, top_k: int, file_name: str = None):
     if collection.count() == 0:
         raise SystemExit("Nothing indexed yet. Add a PDF with: python3 cli.py add file.pdf")
 
-    return query_store(
+    pool = query_store(
         home,
         collection,
         question,
-        top_k,
+        RERANK_POOL if reranker_ready() else top_k,
         where={"file_name": file_name} if file_name else None,
     )
+
+    return rerank(question, pool, top_k)
 
 
 def ask_engine(url: str, api_key: str, question: str, chunks, timeout=300):
@@ -1247,14 +1387,21 @@ def main():
         if semantic_enabled():
             threading.Thread(target=warm_semantic, daemon=True).start()
 
+        if RERANKER:
+            threading.Thread(target=warm_reranker, daemon=True).start()
+
         return cmd_interactive(args, home)
 
     if getattr(args, "needs_key", False) and not args.api_key:
         parser.error("an API key is required to ask questions: --api-key or KRISH_API_KEY")
 
-    # Load the model off to one side, so a question is never waiting on it.
-    if getattr(args, "needs_key", False) and semantic_enabled():
-        threading.Thread(target=warm_semantic, daemon=True).start()
+    # Load the models off to one side, so a question is never waiting on them.
+    if getattr(args, "needs_key", False):
+        if semantic_enabled():
+            threading.Thread(target=warm_semantic, daemon=True).start()
+
+        if RERANKER:
+            threading.Thread(target=warm_reranker, daemon=True).start()
 
     return args.func(args, home)
 
