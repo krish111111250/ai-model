@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Activity, KeyRound } from 'lucide-react';
 import ApiKeyManager from '@/components/cloud/ApiKeyManager';
 import ApiPlayground from '@/components/cloud/ApiPlayground';
+import BillingManager from '@/components/cloud/BillingManager';
 import DocumentManager from '@/components/cloud/DocumentManager';
 import { clearAccount, useAccount } from '@/hooks/useAccount';
 import { cloud } from '@/services/api';
@@ -43,6 +44,7 @@ const DashboardLayout = () => {
   const handleKeyData = useCallback((data) => {
     setSummary({
       keys: data.keys || [],
+      plan: data.plan || 'free',
       // An older engine will not send these. Undefined means "the server did
       // not say", which the card reports as all-time rather than guessing.
       quota:
@@ -156,6 +158,10 @@ const DashboardLayout = () => {
             <StatCard key={stat.label} {...stat} />
           ))}
         </section>
+
+        <div className="mt-12 border-t border-border pt-12">
+          <BillingManager plan={summary?.plan} quota={summary?.quota} />
+        </div>
 
         <div className="mt-12">
           <ApiKeyManager onData={handleKeyData} />

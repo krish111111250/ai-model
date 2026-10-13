@@ -551,6 +551,26 @@ export const cloud = {
     }
   },
 
+  // Scaffold. The endpoint does not exist yet; a 404 is reported as "not
+  // wired" rather than as a failure, so adding the Python side later needs no
+  // change here.
+  createCheckoutSession: async (plan = 'pro') => {
+    try {
+      const response = await cloudClient.post('/v1/billing/checkout', { plan });
+
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw {
+          status: 404,
+          message: 'Checkout is not wired up yet - no Stripe backend behind this button.',
+        };
+      }
+
+      throw cloudError(error, 'Could not start checkout.');
+    }
+  },
+
   revokeKey: async (keyId) => {
     try {
       const response = await cloudClient.delete(`/v1/keys/${keyId}`);
