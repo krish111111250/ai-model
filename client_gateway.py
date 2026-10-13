@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_name     TEXT NOT NULL,
     pages         INTEGER DEFAULT 0,
     total_chunks  INTEGER DEFAULT 0,
+    size_bytes    INTEGER DEFAULT 0,
     sha256        TEXT,
     created_at    TEXT
 );
@@ -206,6 +207,21 @@ def connect() -> sqlite3.Connection:
 def init_db():
     with connect() as connection:
         connection.executescript(SCHEMA)
+
+        # CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a
+        # column added later has to be added by hand. Documents indexed
+        # before this read as 0, which the UI shows as unknown rather than
+        # as an empty file.
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(documents)")
+        }
+
+        if "size_bytes" not in columns:
+            connection.execute(
+                "ALTER TABLE documents ADD COLUMN size_bytes INTEGER DEFAULT 0"
+            )
+            print("🛠  documents.size_bytes added")
 
 
 def now() -> str:
@@ -625,8 +641,10 @@ async def upload(
         with connect() as connection:
             connection.execute(
                 "INSERT INTO documents (document_id, user_id, file_name, pages, "
-                "total_chunks, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (document_id, user_id, file_name, pages, len(chunks), digest, now()),
+                "total_chunks, size_bytes, sha256, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (document_id, user_id, file_name, pages, len(chunks),
+                 len(content), digest, now()),
             )
     except Exception:
         # The chunks are indexed but the document is not listed, so nothing
@@ -657,12 +675,46 @@ async def upload(
 async def list_documents(user_id: str = Query("test_user_01")):
     with connect() as connection:
         rows = connection.execute(
-            "SELECT document_id, file_name, pages, total_chunks, created_at "
-            "FROM documents WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT document_id, file_name, pages, total_chunks, size_bytes, "
+            "created_at FROM documents WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
 
-    return {"documents": [dict(row) for row in rows]}
+    # Which chunks the semantic half has caught up on. One read for the whole
+    # list rather than one per document.
+    embedded = set()
+
+    if cli.semantic_enabled() and cli.reranker_ready() or cli.semantic_ready():
+        try:
+            embedded = set(
+                cli.get_semantic_collection(HOME).get(include=[]).get("ids") or []
+            )
+        except Exception:
+            embedded = set()
+
+    documents = []
+
+    for row in rows:
+        record = dict(row)
+
+        # "ready" once both retrievers can see it. Until the embedding model
+        # has caught up the document is searchable by keyword only, which is
+        # a real difference in answer quality and worth showing.
+        prefix = f"{record['document_id']}::"
+        done = sum(1 for chunk_id in embedded if chunk_id.startswith(prefix))
+
+        if not record["total_chunks"]:
+            record["status"] = "empty"
+        elif not cli.semantic_enabled():
+            record["status"] = "ready"
+        elif done >= record["total_chunks"]:
+            record["status"] = "ready"
+        else:
+            record["status"] = "indexing"
+
+        documents.append(record)
+
+    return {"documents": documents}
 
 
 class RenameRequest(BaseModel):

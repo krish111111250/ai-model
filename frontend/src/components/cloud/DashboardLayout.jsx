@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Activity, KeyRound } from 'lucide-react';
 import ApiKeyManager from '@/components/cloud/ApiKeyManager';
+import DocumentManager from '@/components/cloud/DocumentManager';
 import { cloud } from '@/services/api';
 
 const StatCard = ({ icon: Icon, label, value, note }) => (
@@ -165,6 +166,10 @@ const DashboardLayout = () => {
 
         <div className="mt-12">
           <ApiKeyManager onData={handleKeyData} />
+        </div>
+
+        <div className="mt-12 border-t border-border pt-12">
+          <DocumentManager />
         </div>
       </main>
     </div>
