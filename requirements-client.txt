@@ -1,0 +1,27 @@
+# The local gateway and the CLI: everything that touches a document.
+# Runs on the customer's machine; the engine never sees any of this.
+#
+#   pip install -r requirements-client.txt
+#   python3 client_gateway.py        # serves http://localhost:8001
+#   python3 cli.py --help
+
+fastapi>=0.136
+uvicorn>=0.48
+pydantic>=2.13
+python-multipart>=0.0.9
+
+# Talks to the engine.
+httpx>=0.28
+
+# Reading and indexing PDFs locally.
+pymupdf>=1.27
+chromadb>=1.5
+
+# Semantic retrieval and cross-encoder reranking. Both models are downloaded
+# once and run locally; set KRISH_RETRIEVAL=lexical and KRISH_RERANKER=false
+# to skip them entirely.
+sentence-transformers>=5.0
+
+# Reading answers aloud. Optional: /tts is the only endpoint that needs it,
+# and it is the one call that sends text off the machine.
+edge-tts>=7.0

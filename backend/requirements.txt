@@ -1,0 +1,32 @@
+# The cloud engine: accounts, API keys, billing, answer generation.
+# It holds no documents, so nothing here is for reading or embedding PDFs -
+# see requirements-client.txt for the local gateway's dependencies.
+#
+#   python3 -m venv backend/venv
+#   backend/venv/bin/pip install -r backend/requirements.txt
+
+fastapi>=0.136
+uvicorn>=0.48
+pydantic>=2.13
+
+# Configuration and the key/account store.
+python-dotenv>=1.0
+pymongo>=4.8
+
+# Per-key rate limiting.
+slowapi>=0.1.9
+
+# Outbound calls: OAuth token exchange and provider profile reads.
+httpx>=0.28
+
+# Answer generation against a local Ollama model.
+langchain-ollama>=0.2
+
+# Dashboard accounts. bcrypt directly rather than passlib, which reads
+# bcrypt.__about__ and breaks on bcrypt 4.1+.
+bcrypt>=4.1
+PyJWT>=2.9
+email-validator>=2.2
+
+# Subscriptions.
+stripe>=12.0

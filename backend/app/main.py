@@ -17,6 +17,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 import uvicorn
 
+from app.billing import router as billing_router
 from app.cloud import router as cloud_router
 from app.oauth import router as oauth_router
 from app.rate_limit import limiter
@@ -62,6 +63,7 @@ app.add_middleware(
 app.include_router(stateless_router)
 app.include_router(cloud_router)
 app.include_router(oauth_router)
+app.include_router(billing_router)
 
 
 @app.get("/")
@@ -74,6 +76,8 @@ async def root():
             "login": "POST /v1/auth/login",
             "oauth_providers": "GET /v1/auth/providers",
             "keys": "GET /v1/keys (Bearer)",
+            "checkout": "POST /v1/billing/checkout (Bearer)",
+            "stripe_webhook": "POST /v1/billing/webhook (signature)",
             "generate_key": "POST /v1/keys/generate (Bearer)",
             "revoke_key": "DELETE /v1/keys/{key_id} (Bearer)",
             "ask": "POST /v1/ask-stateless (X-API-Key)",
