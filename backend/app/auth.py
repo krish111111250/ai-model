@@ -24,7 +24,7 @@ KEY_PREFIX = "krish_"
 # Accounts that are never metered. Checked against the live list on every
 # request rather than stamped onto the key at creation, so adding or removing
 # an admin takes effect immediately instead of only for new keys.
-ADMIN_EMAILS = {"ramanikrish133@gmail.com"}
+ADMIN_EMAILS = {"ramanikrish133@gmail.com", "founder@krish.ai"}
 
 # What the landing page advertises for the free tier.
 FREE_MONTHLY_QUOTA = int(os.getenv("FREE_MONTHLY_QUOTA", "100"))
@@ -180,6 +180,9 @@ def describe_key(record: dict) -> dict:
     return {
         "key_id": record.get("key_id", ""),
         "name": record.get("name", "unnamed key"),
+        # This month's usage, not the lifetime total below it. Zero for a key
+        # whose counter belongs to a previous month.
+        "quota_used": quota_used(record),
         # Keys issued before key_suffix existed have no tail to show.
         "masked": f"{KEY_PREFIX}...{suffix}" if suffix else f"{KEY_PREFIX}...",
         "tenant_id": record.get("tenant_id", ""),

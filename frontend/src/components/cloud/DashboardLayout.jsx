@@ -36,6 +36,7 @@ const DashboardLayout = () => {
 
   const [account, setAccount] = useState(null);
   const [keys, setKeys] = useState([]);
+  const [quota, setQuota] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [revokingId, setRevokingId] = useState('');
@@ -55,6 +56,19 @@ const DashboardLayout = () => {
     try {
       const data = await cloud.getKeys();
       setKeys(data.keys || []);
+
+      // An older engine will not send these. Null means "the server did not
+      // say", which the card reports as unknown rather than guessing zero.
+      setQuota(
+        data.quota_used === undefined
+          ? null
+          : {
+              used: data.quota_used,
+              limit: data.quota_limit,
+              unlimited: Boolean(data.unlimited),
+            }
+      );
+
       setError('');
     } catch (problem) {
       setError(problem.message || 'Could not load API keys.');
@@ -86,13 +100,40 @@ const DashboardLayout = () => {
     0
   );
 
+  const monthlyUsage = useMemo(() => {
+    if (!quota) {
+      // Pre-quota engine: the month's figure does not exist, so show the
+      // all-time total and say so, rather than passing it off as monthly.
+      return {
+        value: totalRequests.toLocaleString(),
+        note: 'All time - this engine does not report monthly usage',
+      };
+    }
+
+    if (quota.unlimited || quota.limit === null) {
+      return {
+        value: `${quota.used.toLocaleString()} / ∞`,
+        note: 'Unlimited on this account',
+      };
+    }
+
+    const left = Math.max(0, quota.limit - quota.used);
+
+    return {
+      value: `${quota.used.toLocaleString()} / ${quota.limit}`,
+      note: left === 0
+        ? 'Quota reached - requests are being refused'
+        : `${left} left this month`,
+    };
+  }, [quota, totalRequests]);
+
   const stats = useMemo(
     () => [
       {
         icon: Activity,
-        label: 'Total queries',
-        value: totalRequests.toLocaleString(),
-        note: 'All time, across every key',
+        label: 'Monthly usage',
+        value: monthlyUsage.value,
+        note: monthlyUsage.note,
       },
       {
         icon: KeyRound,
@@ -113,7 +154,7 @@ const DashboardLayout = () => {
         note: 'Not tracked yet',
       },
     ],
-    [activeKeys, keys.length, totalRequests]
+    [activeKeys, keys.length, monthlyUsage]
   );
 
   const generateKey = async (name) => {
@@ -304,6 +345,9 @@ const DashboardLayout = () => {
                   <th className="hidden px-5 py-3 font-medium md:table-cell">
                     Last used
                   </th>
+                  <th className="hidden px-5 py-3 font-medium lg:table-cell">
+                    This month
+                  </th>
                   <th className="px-5 py-3" />
                 </tr>
               </thead>
@@ -311,7 +355,7 @@ const DashboardLayout = () => {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={5} className="px-5 py-10 text-center">
+                    <td colSpan={6} className="px-5 py-10 text-center">
                       <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />
                     </td>
                   </tr>
@@ -320,7 +364,7 @@ const DashboardLayout = () => {
                 {!loading && keys.length === 0 && (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={6}
                       className="px-5 py-10 text-center text-sm text-muted-foreground"
                     >
                       No keys. Generate one to start making requests.
@@ -364,6 +408,19 @@ const DashboardLayout = () => {
 
                         <td className="hidden px-5 py-4 text-muted-foreground md:table-cell">
                           {asDate(key.last_used_at) || 'Never'}
+                        </td>
+
+                        <td className="hidden px-5 py-4 text-muted-foreground lg:table-cell">
+                          {key.quota_used === undefined ? (
+                            '--'
+                          ) : (
+                            <>
+                              {key.quota_used}
+                              <span className="ml-1.5 text-[11px] opacity-70">
+                                of {key.request_count} all time
+                              </span>
+                            </>
+                          )}
                         </td>
 
                         <td className="px-5 py-4 text-right">

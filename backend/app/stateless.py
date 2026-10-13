@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 
 from .accounts import get_current_user
 from .auth import (
+    ADMIN_EMAILS,
+    FREE_MONTHLY_QUOTA,
     generate_api_key,
     list_keys_for_user,
     require_api_key,
@@ -201,11 +203,17 @@ async def list_keys(request: Request, user: dict = Depends(get_current_user)):
     masked tail to tell keys apart.
     """
     keys = list_keys_for_user(user["user_id"])
+    unlimited = (user.get("email", "") or "").strip().lower() in ADMIN_EMAILS
 
     return {
         "keys": keys,
         "active": sum(1 for key in keys if not key["revoked_at"]),
         "total": len(keys),
+        # The quota is per key, so the account's usage is the sum across them.
+        # Revoked keys are included: what they spent this month still counts.
+        "quota_used": sum(key["quota_used"] for key in keys),
+        "quota_limit": None if unlimited else FREE_MONTHLY_QUOTA,
+        "unlimited": unlimited,
     }
 
 
