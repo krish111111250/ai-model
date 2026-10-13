@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
-  AlertTriangle,
   Check,
   Copy,
   KeyRound,
@@ -144,15 +143,6 @@ const DashboardLayout = () => {
             ? `${activeKeys} in use`
             : `${activeKeys} in use, ${keys.length - activeKeys} revoked`,
       },
-      {
-        icon: AlertTriangle,
-        label: 'Error rate',
-        // Shown as unavailable rather than as a number, because the engine
-        // counts requests but not failures. A plausible-looking 0.4% here
-        // would be a decision made on invented data.
-        value: '--',
-        note: 'Not tracked yet',
-      },
     ],
     [activeKeys, keys.length, monthlyUsage]
   );
@@ -258,7 +248,7 @@ const DashboardLayout = () => {
           Usage across every key on this account.
         </p>
 
-        <section className="mt-6 grid gap-4 sm:grid-cols-3">
+        <section className="mt-6 grid gap-4 sm:grid-cols-2">
           {stats.map((stat) => (
             <StatCard key={stat.label} {...stat} />
           ))}

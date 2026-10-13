@@ -25,6 +25,12 @@ const GoogleMark = ({ className }) => (
 
 const MARKS = { github: GitHubMark, google: GoogleMark };
 
+// Google only for the MVP. The engine will offer any provider it has
+// credentials for, so this is the second gate: a half-configured GitHub app
+// would otherwise put a button on this page that leads nowhere. Add 'github'
+// back once that flow has been through a real round trip.
+const ENABLED_PROVIDERS = new Set(['google']);
+
 /** One value out of the URL fragment, which is where the callback leaves it. */
 const readFragment = (key) => {
   try {
@@ -70,7 +76,9 @@ const AuthPage = () => {
 
   useEffect(() => {
     const load = async () => {
-      setProviders(await cloud.providers());
+      const offered = await cloud.providers();
+
+      setProviders(offered.filter((provider) => ENABLED_PROVIDERS.has(provider.id)));
     };
 
     load();

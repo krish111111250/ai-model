@@ -10,6 +10,9 @@ export default defineConfig({
     // "@/components/..." instead of "../../components/..." - shadcn's CLI
     // writes imports in this form, so the alias has to exist before adding
     // any of its components.
-    alias: { '@': path.resolve(__dirname, './src') },
+    // import.meta.dirname, not __dirname: this file is ESM, where __dirname
+    // does not exist. It only appeared to work because Vite transpiles the
+    // config to CJS before running it.
+    alias: { '@': path.resolve(import.meta.dirname, './src') },
   },
 })
