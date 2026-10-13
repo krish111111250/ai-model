@@ -346,7 +346,7 @@ const DashboardLayout = () => {
                     Last used
                   </th>
                   <th className="hidden px-5 py-3 font-medium lg:table-cell">
-                    This month
+                    Requests
                   </th>
                   <th className="px-5 py-3" />
                 </tr>
@@ -410,17 +410,14 @@ const DashboardLayout = () => {
                           {asDate(key.last_used_at) || 'Never'}
                         </td>
 
+                        {/* Lifetime, per key. The month's figure is an
+                            account total now - the quota is enforced there -
+                            so there is no per-key monthly number to show. */}
                         <td className="hidden px-5 py-4 text-muted-foreground lg:table-cell">
-                          {key.quota_used === undefined ? (
-                            '--'
-                          ) : (
-                            <>
-                              {key.quota_used}
-                              <span className="ml-1.5 text-[11px] opacity-70">
-                                of {key.request_count} all time
-                              </span>
-                            </>
-                          )}
+                          {(key.request_count || 0).toLocaleString()}
+                          <span className="ml-1.5 text-[11px] opacity-70">
+                            all time
+                          </span>
                         </td>
 
                         <td className="px-5 py-4 text-right">

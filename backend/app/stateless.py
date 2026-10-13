@@ -23,6 +23,7 @@ from .auth import (
     FREE_MONTHLY_QUOTA,
     generate_api_key,
     list_keys_for_user,
+    quota_used,
     require_api_key,
     revoke_key,
 )
@@ -209,9 +210,10 @@ async def list_keys(request: Request, user: dict = Depends(get_current_user)):
         "keys": keys,
         "active": sum(1 for key in keys if not key["revoked_at"]),
         "total": len(keys),
-        # The quota is per key, so the account's usage is the sum across them.
-        # Revoked keys are included: what they spent this month still counts.
-        "quota_used": sum(key["quota_used"] for key in keys),
+        # Read from the account, which is where it is enforced. Summing across
+        # keys would disagree with the limit the engine actually applies, and
+        # would drop to zero the moment a maxed-out key was revoked.
+        "quota_used": quota_used(user["user_id"]),
         "quota_limit": None if unlimited else FREE_MONTHLY_QUOTA,
         "unlimited": unlimited,
     }

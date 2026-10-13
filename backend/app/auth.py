@@ -77,26 +77,102 @@ def is_admin(record: dict) -> bool:
     return owner_email(record) in ADMIN_EMAILS
 
 
-def quota_used(record: dict) -> int:
-    """
-    Requests this key has made in the current month.
-
-    Not request_count: that one counts for the lifetime of the key and nothing
-    resets it, so metering against it would be a lifetime cap wearing a
-    monthly label - and the keys already in this database are past 400.
-    """
-    if record.get("quota_period") != current_period():
+def period_count(record: dict) -> int:
+    """The month's count on a record, or 0 if its counter is from a past month."""
+    if not record or record.get("quota_period") != current_period():
         return 0
 
     return int(record.get("quota_count") or 0)
 
 
+def quota_used(user_id: str) -> int:
+    """
+    Requests this *account* has made in the current month.
+
+    Metered on the account, not the key. Per key, a customer could issue three
+    keys and spend three times the quota while the dashboard showed them at
+    300/100.
+
+    Not request_count either: that counts for the lifetime of a key and
+    nothing resets it, so metering against it would be a lifetime cap wearing
+    a monthly label - and the keys already in this database are past 400.
+    """
+    from .database import users_collection
+
+    if users_collection is None or not user_id:
+        return 0
+
+    user = users_collection.find_one(
+        {"user_id": user_id}, {"quota_period": 1, "quota_count": 1}
+    )
+
+    return period_count(user)
+
+
+# Rolls the month and adds one, in a single update. $ifNull covers an account
+# that has never made a request.
+def charge_pipeline(period: str) -> list:
+    return [
+        {
+            "$set": {
+                "quota_period": period,
+                "quota_count": {
+                    "$cond": [
+                        {"$eq": ["$quota_period", period]},
+                        {"$add": [{"$ifNull": ["$quota_count", 0]}, 1]},
+                        1,
+                    ]
+                },
+                "last_request_at": datetime.utcnow(),
+            }
+        }
+    ]
+
+
 def enforce_quota(record: dict):
-    """Let admins through; meter everyone else against the month."""
-    if is_admin(record):
+    """
+    Count this request against the owner's month, and refuse it if that would
+    exceed the quota.
+
+    Checking and incrementing are one write, not two steps. Read-then-write
+    lets two requests arriving together both see 99 and both proceed, which is
+    exactly the boundary a quota exists to hold. Here the limit is part of the
+    filter: if the account is already at it, nothing matches and nothing is
+    incremented, so a refused request is never charged.
+
+    Admins are counted but never limited, so their update carries no limit
+    clause.
+    """
+    from .database import users_collection
+
+    user_id = record.get("user_id") or ""
+
+    # A key with no owner predates accounts. Nothing to meter it against.
+    if users_collection is None or not user_id:
         return
 
-    used = quota_used(record)
+    period = current_period()
+    scope = {"user_id": user_id}
+
+    if not is_admin(record):
+        # Match only while under the limit. A counter from a previous month is
+        # spent, so it must not block this one.
+        scope = {
+            "user_id": user_id,
+            "$or": [
+                {"quota_period": {"$ne": period}},
+                {"quota_count": {"$lt": FREE_MONTHLY_QUOTA}},
+            ],
+        }
+
+    result = users_collection.update_one(scope, charge_pipeline(period))
+
+    if result.matched_count:
+        return
+
+    # Nothing matched: either the account is at its limit, or it is gone. One
+    # read on the failure path tells them apart.
+    used = quota_used(user_id)
 
     if used >= FREE_MONTHLY_QUOTA:
         raise HTTPException(
@@ -180,9 +256,6 @@ def describe_key(record: dict) -> dict:
     return {
         "key_id": record.get("key_id", ""),
         "name": record.get("name", "unnamed key"),
-        # This month's usage, not the lifetime total below it. Zero for a key
-        # whose counter belongs to a previous month.
-        "quota_used": quota_used(record),
         # Keys issued before key_suffix existed have no tail to show.
         "masked": f"{KEY_PREFIX}...{suffix}" if suffix else f"{KEY_PREFIX}...",
         "tenant_id": record.get("tenant_id", ""),
@@ -254,30 +327,23 @@ def lookup_tenant(api_key: str):
 
 def touch_key(record: dict):
     """
-    Record one use: lifetime total, and the current month's count.
+    Per-key bookkeeping: when it was last used, and how often ever.
 
-    The month's counter is reset rather than incremented when the period has
-    rolled over, which is what makes the quota monthly. Same single write as
-    before - the roll is a $set in the same update.
+    The quota is not here any more - enforce_quota charges the account. These
+    two fields are what the dashboard shows per key, which is how an unused
+    or a runaway key gets noticed. Drop this call if that display goes.
     """
     if api_keys_collection is None:
         return
 
-    period = current_period()
-
-    update = {
-        "$set": {"last_used_at": datetime.utcnow()},
-        "$inc": {"request_count": 1},
-    }
-
-    if record.get("quota_period") == period:
-        update["$inc"]["quota_count"] = 1
-    else:
-        update["$set"]["quota_period"] = period
-        update["$set"]["quota_count"] = 1
-
     try:
-        api_keys_collection.update_one({"key_hash": record["key_hash"]}, update)
+        api_keys_collection.update_one(
+            {"key_hash": record["key_hash"]},
+            {
+                "$set": {"last_used_at": datetime.utcnow()},
+                "$inc": {"request_count": 1},
+            },
+        )
     except Exception as e:
         print(f"⚠️ Could not record key usage: {e}")
 
