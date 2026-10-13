@@ -15,7 +15,7 @@ const asDate = (value) => (value ? String(value).slice(0, 10) : null);
  * there is no second source of truth to keep in step. The dashboard's stat
  * cards read the same response through onData.
  */
-const ApiKeyManager = ({ onData }) => {
+const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
   const [keys, setKeys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -54,7 +54,9 @@ const ApiKeyManager = ({ onData }) => {
     };
 
     bootstrap();
-  }, [loadKeys]);
+    // refreshKey is a signal, not data: the dashboard bumps it after a Stripe
+    // redirect so this list reflects the same change the plan card does.
+  }, [loadKeys, refreshKey]);
 
   const generateKey = async (name) => {
     if (generating) return;

@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Activity, KeyRound } from 'lucide-react';
+import { Activity, KeyRound, Loader2 } from 'lucide-react';
 import ApiKeyManager from '@/components/cloud/ApiKeyManager';
 import ApiPlayground from '@/components/cloud/ApiPlayground';
 import BillingManager from '@/components/cloud/BillingManager';
@@ -39,6 +39,11 @@ const DashboardLayout = () => {
   const [summary, setSummary] = useState(null);
   const [documents, setDocuments] = useState([]);
 
+  // Bumped to make ApiKeyManager refetch. A counter rather than an imperative
+  // handle on the child: the child already refetches when its deps change.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [syncing, setSyncing] = useState('');
+
   // Identical arguments must give an identical function, or ApiKeyManager's
   // effect would see a new dependency on every render and refetch forever.
   const handleKeyData = useCallback((data) => {
@@ -57,6 +62,71 @@ const DashboardLayout = () => {
             },
     });
   }, []);
+
+  // Coming back from Stripe, the plan may not have changed yet: the webhook
+  // that grants it is a separate request from Stripe's servers, and it can
+  // land after the browser does. Showing "Free plan" to someone who just paid
+  // is the worst possible moment to be a second out of date.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get('checkout');
+    const portal = params.get('portal');
+
+    if (!checkout && !portal) return;
+
+    // Cleaned immediately, not after the wait: a reload mid-wait should not
+    // start the whole dance again.
+    window.history.replaceState(null, '', window.location.pathname);
+
+    if (checkout === 'cancelled') return;
+
+    let cancelled = false;
+
+    const sync = async () => {
+      setSyncing(
+        checkout === 'success'
+          ? 'Confirming your subscription...'
+          : 'Checking for billing changes...'
+      );
+
+      // Checkout has a target to wait for - the plan turning paid - so poll
+      // until it does. Returning from the portal has no single expected
+      // outcome (a cancellation, a new card, or nothing at all), so one
+      // delayed read is all that can be justified.
+      const attempts = checkout === 'success' ? 5 : 1;
+
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+
+        if (cancelled) return;
+
+        try {
+          const data = await cloud.getKeys();
+
+          if (cancelled) return;
+
+          handleKeyData(data);
+
+          if (checkout !== 'success' || data.unlimited) break;
+        } catch {
+          // The interceptor handles an expired session; anything else is
+          // covered by the next attempt or by the manual reload.
+        }
+      }
+
+      if (cancelled) return;
+
+      // Let the key table pick up the same change.
+      setRefreshKey((value) => value + 1);
+      setSyncing('');
+    };
+
+    sync();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [handleKeyData]);
 
   const stats = useMemo(() => {
     const keys = summary?.keys || [];
@@ -153,6 +223,14 @@ const DashboardLayout = () => {
           Usage across every key on this account.
         </p>
 
+        {/* Says why the page is about to change by itself. */}
+        {syncing && (
+          <p className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            {syncing}
+          </p>
+        )}
+
         <section className="mt-6 grid gap-4 sm:grid-cols-2">
           {stats.map((stat) => (
             <StatCard key={stat.label} {...stat} />
@@ -164,7 +242,7 @@ const DashboardLayout = () => {
         </div>
 
         <div className="mt-12">
-          <ApiKeyManager onData={handleKeyData} />
+          <ApiKeyManager onData={handleKeyData} refreshKey={refreshKey} />
         </div>
 
         <div className="mt-12 border-t border-border pt-12">
