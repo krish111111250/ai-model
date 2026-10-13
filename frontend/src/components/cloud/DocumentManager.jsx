@@ -44,7 +44,7 @@ const STATUS = {
  * engine would mean uploading the document itself, which is the one thing
  * this product promises not to do.
  */
-const DocumentManager = () => {
+const DocumentManager = ({ onDocuments }) => {
   const fileInput = useRef(null);
 
   // No identity is passed to the gateway: it derives the owner from the API
@@ -62,17 +62,22 @@ const DocumentManager = () => {
   const loadDocuments = useCallback(async () => {
     try {
       const data = await api.getDocuments();
+      const list = data.documents || [];
 
-      setDocuments(data.documents || []);
+      setDocuments(list);
       setOffline(false);
       setError('');
+
+      // The playground needs the same list for its selector. Handing it up
+      // beats a second request, and means an upload here refreshes it there.
+      onDocuments?.(list);
     } catch (problem) {
       // The dashboard is reachable without the local app running, so this is
       // an expected state rather than a failure to report as an error.
       setOffline(problem.status === 500 || problem.status === 0);
       setError(problem.message || 'Could not load documents.');
     }
-  }, []);
+  }, [onDocuments]);
 
   useEffect(() => {
     const bootstrap = async () => {

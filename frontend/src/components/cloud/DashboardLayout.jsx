@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Activity, KeyRound } from 'lucide-react';
 import ApiKeyManager from '@/components/cloud/ApiKeyManager';
+import ApiPlayground from '@/components/cloud/ApiPlayground';
 import DocumentManager from '@/components/cloud/DocumentManager';
 import { clearAccount, useAccount } from '@/hooks/useAccount';
 import { cloud } from '@/services/api';
@@ -35,6 +36,7 @@ const DashboardLayout = () => {
   const { account } = useAccount();
 
   const [summary, setSummary] = useState(null);
+  const [documents, setDocuments] = useState([]);
 
   // Identical arguments must give an identical function, or ApiKeyManager's
   // effect would see a new dependency on every render and refetch forever.
@@ -160,7 +162,11 @@ const DashboardLayout = () => {
         </div>
 
         <div className="mt-12 border-t border-border pt-12">
-          <DocumentManager />
+          <DocumentManager onDocuments={setDocuments} />
+        </div>
+
+        <div className="mt-12 border-t border-border pt-12">
+          <ApiPlayground documents={documents} />
         </div>
       </main>
     </div>
