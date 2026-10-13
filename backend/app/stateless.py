@@ -19,9 +19,10 @@ from pydantic import BaseModel, Field
 
 from .accounts import get_current_user
 from .auth import (
-    ADMIN_EMAILS,
+    DEFAULT_PLAN,
     FREE_MONTHLY_QUOTA,
     generate_api_key,
+    is_unlimited,
     list_keys_for_user,
     quota_used,
     require_api_key,
@@ -204,7 +205,10 @@ async def list_keys(request: Request, user: dict = Depends(get_current_user)):
     masked tail to tell keys apart.
     """
     keys = list_keys_for_user(user["user_id"])
-    unlimited = (user.get("email", "") or "").strip().lower() in ADMIN_EMAILS
+
+    # The user document carries the plan, so this answers both halves - admin
+    # and paid - without another read.
+    unlimited = is_unlimited(user)
 
     return {
         "keys": keys,
@@ -216,6 +220,7 @@ async def list_keys(request: Request, user: dict = Depends(get_current_user)):
         "quota_used": quota_used(user["user_id"]),
         "quota_limit": None if unlimited else FREE_MONTHLY_QUOTA,
         "unlimited": unlimited,
+        "plan": user.get("plan") or DEFAULT_PLAN,
     }
 
 

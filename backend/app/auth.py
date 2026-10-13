@@ -29,6 +29,12 @@ ADMIN_EMAILS = {"ramanikrish133@gmail.com", "founder@krish.ai"}
 # What the landing page advertises for the free tier.
 FREE_MONTHLY_QUOTA = int(os.getenv("FREE_MONTHLY_QUOTA", "100"))
 
+# Plans that are not metered. A set so a second paid tier is one word, not a
+# second branch.
+UNLIMITED_PLANS = frozenset({"pro"})
+
+DEFAULT_PLAN = "free"
+
 
 def current_period() -> str:
     """The quota window, as "2026-10"."""
@@ -75,6 +81,22 @@ _email_cache = {}
 
 def is_admin(record: dict) -> bool:
     return owner_email(record) in ADMIN_EMAILS
+
+
+def is_unlimited(record: dict) -> bool:
+    """
+    Whether this record's owner is exempt from the monthly quota.
+
+    Takes either a user document or an API key record. A user document carries
+    the plan; a key record does not, so for a key this answers the admin half
+    only - the plan half is evaluated inside enforce_quota's update filter,
+    against the user document itself, which avoids a read per request and
+    keeps the decision atomic with the increment.
+    """
+    if is_admin(record):
+        return True
+
+    return (record.get("plan") or DEFAULT_PLAN) in UNLIMITED_PLANS
 
 
 def period_count(record: dict) -> int:
@@ -154,12 +176,15 @@ def enforce_quota(record: dict):
     period = current_period()
     scope = {"user_id": user_id}
 
-    if not is_admin(record):
-        # Match only while under the limit. A counter from a previous month is
-        # spent, so it must not block this one.
+    if not is_unlimited(record):
+        # Match only while the account may spend. A paid plan always may; a
+        # counter from a previous month is spent, so it must not block this
+        # one. Reading the plan from the document inside the same update is
+        # what keeps this one write instead of a read plus a write.
         scope = {
             "user_id": user_id,
             "$or": [
+                {"plan": {"$in": list(UNLIMITED_PLANS)}},
                 {"quota_period": {"$ne": period}},
                 {"quota_count": {"$lt": FREE_MONTHLY_QUOTA}},
             ],
@@ -170,9 +195,17 @@ def enforce_quota(record: dict):
     if result.matched_count:
         return
 
-    # Nothing matched: either the account is at its limit, or it is gone. One
-    # read on the failure path tells them apart.
-    used = quota_used(user_id)
+    # Nothing matched: the account is at its limit, or it is gone. One read on
+    # the failure path tells them apart - and confirms the plan, so a paid
+    # account is never told it is over quota.
+    user = users_collection.find_one(
+        {"user_id": user_id}, {"plan": 1, "quota_period": 1, "quota_count": 1}
+    )
+
+    if user and is_unlimited(user):
+        return
+
+    used = period_count(user)
 
     if used >= FREE_MONTHLY_QUOTA:
         raise HTTPException(

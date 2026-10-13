@@ -18,6 +18,7 @@ import bcrypt
 import jwt
 from fastapi import Header, HTTPException
 
+from .auth import DEFAULT_PLAN
 from .database import users_collection
 
 JWT_ALGORITHM = "HS256"
@@ -106,6 +107,7 @@ def public_user(user: dict) -> dict:
     return {
         "user_id": user.get("user_id", ""),
         "email": user.get("email", ""),
+        "plan": user.get("plan") or DEFAULT_PLAN,
         "created_at": str(user.get("created_at", "")),
     }
 
@@ -124,6 +126,10 @@ def create_user(email: str, password: str) -> dict:
         "email": email,
         "hashed_password": hashed,
         "auth_provider": "password",
+        # Explicit, so the field exists on every account from the start. A
+        # missing plan reads as free anyway, but a field that is sometimes
+        # absent is a field every query has to special-case.
+        "plan": DEFAULT_PLAN,
         "created_at": datetime.now(timezone.utc),
         "last_login_at": None,
     }
@@ -220,6 +226,7 @@ def find_or_create_oauth_user(
         "hashed_password": "",
         "auth_provider": provider,
         "providers": {provider: provider_id},
+        "plan": DEFAULT_PLAN,
         "created_at": datetime.now(timezone.utc),
         "last_login_at": datetime.now(timezone.utc),
     }
