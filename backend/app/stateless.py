@@ -177,7 +177,11 @@ async def create_key(
     Keys now belong to an account, which is also what makes listing and
     revoking them possible.
     """
-    created = generate_api_key(name=body.name, user_id=user["user_id"])
+    created = generate_api_key(
+        name=body.name,
+        user_id=user["user_id"],
+        user_email=user.get("email", ""),
+    )
 
     return {
         **created,

@@ -10,6 +10,7 @@ working keys. The plaintext key is shown exactly once, at creation.
 """
 
 import hashlib
+import os
 import secrets
 import uuid
 from datetime import datetime
@@ -20,6 +21,92 @@ from .database import api_keys_collection
 
 KEY_PREFIX = "krish_"
 
+# Accounts that are never metered. Checked against the live list on every
+# request rather than stamped onto the key at creation, so adding or removing
+# an admin takes effect immediately instead of only for new keys.
+ADMIN_EMAILS = {"ramanikrish133@gmail.com"}
+
+# What the landing page advertises for the free tier.
+FREE_MONTHLY_QUOTA = int(os.getenv("FREE_MONTHLY_QUOTA", "100"))
+
+
+def current_period() -> str:
+    """The quota window, as "2026-10"."""
+    now = datetime.utcnow()
+
+    return f"{now.year:04d}-{now.month:02d}"
+
+
+def owner_email(record: dict) -> str:
+    """
+    The email of the account that owns this key.
+
+    Denormalised onto the key record at creation, because this is read on
+    every authenticated request and a join per request to answer "is this an
+    admin" is a read the hot path does not need. Keys issued before the field
+    existed fall back to one lookup, cached for the life of the process.
+    """
+    email = (record.get("user_email") or "").strip().lower()
+
+    if email:
+        return email
+
+    user_id = record.get("user_id") or ""
+
+    if not user_id:
+        return ""
+
+    if user_id not in _email_cache:
+        from .database import users_collection
+
+        user = (
+            users_collection.find_one({"user_id": user_id}, {"email": 1})
+            if users_collection is not None
+            else None
+        )
+
+        _email_cache[user_id] = (user or {}).get("email", "").strip().lower()
+
+    return _email_cache[user_id]
+
+
+_email_cache = {}
+
+
+def is_admin(record: dict) -> bool:
+    return owner_email(record) in ADMIN_EMAILS
+
+
+def quota_used(record: dict) -> int:
+    """
+    Requests this key has made in the current month.
+
+    Not request_count: that one counts for the lifetime of the key and nothing
+    resets it, so metering against it would be a lifetime cap wearing a
+    monthly label - and the keys already in this database are past 400.
+    """
+    if record.get("quota_period") != current_period():
+        return 0
+
+    return int(record.get("quota_count") or 0)
+
+
+def enforce_quota(record: dict):
+    """Let admins through; meter everyone else against the month."""
+    if is_admin(record):
+        return
+
+    used = quota_used(record)
+
+    if used >= FREE_MONTHLY_QUOTA:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Monthly quota exceeded ({used}/{FREE_MONTHLY_QUOTA}). "
+                "Please upgrade your plan."
+            ),
+        )
+
 
 def hash_key(api_key: str) -> str:
     return hashlib.sha256((api_key or "").encode()).hexdigest()
@@ -29,6 +116,7 @@ def generate_api_key(
     name: str = "",
     webhook_url: str = "",
     user_id: str = "",
+    user_email: str = "",
 ) -> dict:
     """Create a key. The plaintext is returned here and never stored."""
     if api_keys_collection is None:
@@ -54,6 +142,8 @@ def generate_api_key(
         "key_suffix": api_key[-4:],
         "tenant_id": tenant_id,
         "user_id": user_id or "",
+        # Denormalised so the quota check needs no join - see owner_email().
+        "user_email": (user_email or "").strip().lower(),
         "name": name or "unnamed key",
         "webhook_url": webhook_url or "",
         "created_at": datetime.utcnow(),
@@ -159,18 +249,32 @@ def lookup_tenant(api_key: str):
     return record
 
 
-def touch_key(key_hash: str):
+def touch_key(record: dict):
+    """
+    Record one use: lifetime total, and the current month's count.
+
+    The month's counter is reset rather than incremented when the period has
+    rolled over, which is what makes the quota monthly. Same single write as
+    before - the roll is a $set in the same update.
+    """
     if api_keys_collection is None:
         return
 
+    period = current_period()
+
+    update = {
+        "$set": {"last_used_at": datetime.utcnow()},
+        "$inc": {"request_count": 1},
+    }
+
+    if record.get("quota_period") == period:
+        update["$inc"]["quota_count"] = 1
+    else:
+        update["$set"]["quota_period"] = period
+        update["$set"]["quota_count"] = 1
+
     try:
-        api_keys_collection.update_one(
-            {"key_hash": key_hash},
-            {
-                "$set": {"last_used_at": datetime.utcnow()},
-                "$inc": {"request_count": 1},
-            }
-        )
+        api_keys_collection.update_one({"key_hash": record["key_hash"]}, update)
     except Exception as e:
         print(f"⚠️ Could not record key usage: {e}")
 
@@ -191,7 +295,11 @@ async def require_api_key(x_api_key: str = Header(None, alias="X-API-Key")) -> d
             detail="Invalid or revoked API key.",
         )
 
-    touch_key(tenant["key_hash"])
+    # Decided on the record already in hand: no second read, and no write for
+    # a request that is about to be rejected.
+    enforce_quota(tenant)
+
+    touch_key(tenant)
     return tenant
 
 
@@ -210,5 +318,6 @@ async def optional_api_key(x_api_key: str = Header(None, alias="X-API-Key")):
     if not tenant:
         raise HTTPException(status_code=403, detail="Invalid or revoked API key.")
 
-    touch_key(tenant["key_hash"])
+    enforce_quota(tenant)
+    touch_key(tenant)
     return tenant
