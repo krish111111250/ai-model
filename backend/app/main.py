@@ -77,6 +77,7 @@ async def root():
             "oauth_providers": "GET /v1/auth/providers",
             "keys": "GET /v1/keys (Bearer)",
             "checkout": "POST /v1/billing/checkout (Bearer)",
+            "billing_portal": "POST /v1/billing/portal (Bearer)",
             "stripe_webhook": "POST /v1/billing/webhook (signature)",
             "generate_key": "POST /v1/keys/generate (Bearer)",
             "revoke_key": "DELETE /v1/keys/{key_id} (Bearer)",

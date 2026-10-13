@@ -571,6 +571,25 @@ export const cloud = {
     }
   },
 
+  // Stripe's hosted portal: invoices, cards and cancellation. Needs a
+  // stripe_customer_id, which only exists once an account has checked out.
+  createPortalSession: async () => {
+    try {
+      const response = await cloudClient.post('/v1/billing/portal');
+
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw {
+          status: 404,
+          message: 'The billing portal is not wired up on this server yet.',
+        };
+      }
+
+      throw cloudError(error, 'Could not open the billing portal.');
+    }
+  },
+
   revokeKey: async (keyId) => {
     try {
       const response = await cloudClient.delete(`/v1/keys/${keyId}`);

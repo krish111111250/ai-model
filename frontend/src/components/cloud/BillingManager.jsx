@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, CreditCard, Loader2, Sparkles } from 'lucide-react';
+import { Check, CreditCard, ExternalLink, Loader2, Sparkles } from 'lucide-react';
 import { cloud } from '@/services/api';
 
 // What the Pro tier actually buys, in this architecture. Deliberately not
@@ -28,6 +28,7 @@ const nextReset = () => {
  */
 const BillingManager = ({ plan = 'free', quota }) => {
   const [starting, setStarting] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState('');
 
   const unlimited = Boolean(quota?.unlimited) || quota?.limit === null;
@@ -45,6 +46,31 @@ const BillingManager = ({ plan = 'free', quota }) => {
   // billing page over.
   const exempt = unlimited && !isPro;
   const showUpgrade = !isPro && !unlimited;
+
+  const manage = async () => {
+    if (opening) return;
+
+    setOpening(true);
+    setNotice('');
+
+    try {
+      const session = await cloud.createPortalSession();
+
+      if (session?.url) {
+        // Leaves for Stripe. Whatever they change there comes back to us as a
+        // webhook, not as a return value.
+        window.location.assign(session.url);
+        return;
+      }
+
+      setNotice('The portal returned no URL.');
+    } catch (problem) {
+      setNotice(problem.message || 'Could not open the billing portal.');
+      console.warn('[billing] portal unavailable:', problem);
+    } finally {
+      setOpening(false);
+    }
+  };
 
   const upgrade = async () => {
     if (starting) return;
@@ -182,11 +208,24 @@ const BillingManager = ({ plan = 'free', quota }) => {
             ))}
           </ul>
 
-          {!showUpgrade ? (
+          {isPro ? (
+            <button
+              type="button"
+              onClick={manage}
+              disabled={opening}
+              className="mt-6 inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-secondary px-4 py-2.5 text-sm font-medium text-secondary-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {opening ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <ExternalLink className="size-4" />
+              )}
+              {opening ? 'Opening portal...' : 'Manage subscription'}
+            </button>
+          ) : !showUpgrade ? (
             <p className="mt-6 text-xs text-muted-foreground">
-              {isPro
-                ? 'Thanks - you are on Pro. Manage or cancel from the billing portal once it is wired up.'
-                : 'This account already has unlimited requests, so there is nothing to upgrade.'}
+              This account already has unlimited requests, so there is nothing
+              to upgrade.
             </p>
           ) : (
             <button
@@ -202,6 +241,12 @@ const BillingManager = ({ plan = 'free', quota }) => {
               )}
               {starting ? 'Starting checkout...' : 'Upgrade with Stripe'}
             </button>
+          )}
+
+          {isPro && !notice && (
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+              Invoices, card details and cancellation, on Stripe.
+            </p>
           )}
 
           {notice && (

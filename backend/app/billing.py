@@ -168,6 +168,47 @@ async def checkout(request: Request, user: dict = Depends(get_current_user)):
     return {"url": session.url, "session_id": session.id}
 
 
+@router.post("/portal")
+@limiter.limit("30/hour")
+async def portal(request: Request, user: dict = Depends(get_current_user)):
+    """
+    A link into Stripe's hosted customer portal.
+
+    Invoices, card changes and cancellation all live there, which is why this
+    endpoint is three lines and there is no billing UI to maintain. Stripe
+    tells us what happened afterwards through the webhook; this returns the
+    customer to the dashboard but promises nothing about what they did.
+    """
+    stripe = stripe_client()
+    customer_id = (user.get("stripe_customer_id") or "").strip()
+
+    if not customer_id:
+        # No customer means they never checked out - a plan set by hand, or an
+        # admin exemption. There is nothing for the portal to show, and asking
+        # Stripe would just return an error about an unknown customer.
+        raise HTTPException(
+            status_code=400,
+            detail="No Stripe customer on this account. Subscribe first.",
+        )
+
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=f"{frontend_url()}/dashboard?portal=return",
+        )
+    except Exception as error:
+        print(f"⚠️  portal session failed for {user['user_id']}: {error}")
+
+        raise HTTPException(
+            status_code=502,
+            detail="Could not open the billing portal. Try again in a moment.",
+        )
+
+    print(f"💳 portal opened for {user['user_id']}")
+
+    return {"url": session.url}
+
+
 @router.post("/webhook")
 @limiter.exempt
 async def webhook(request: Request, stripe_signature: str = Header(None)):
