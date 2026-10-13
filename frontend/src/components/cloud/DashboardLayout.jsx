@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Activity, KeyRound } from 'lucide-react';
 import ApiKeyManager from '@/components/cloud/ApiKeyManager';
 import DocumentManager from '@/components/cloud/DocumentManager';
+import { clearAccount, useAccount } from '@/hooks/useAccount';
 import { cloud } from '@/services/api';
 
 const StatCard = ({ icon: Icon, label, value, note }) => (
@@ -29,7 +30,10 @@ const StatCard = ({ icon: Icon, label, value, note }) => (
 const DashboardLayout = () => {
   const navigate = useNavigate();
 
-  const [account, setAccount] = useState(null);
+  // Same hook the document manager uses, so the header and the document
+  // list can never be scoped to different accounts.
+  const { account } = useAccount();
+
   const [summary, setSummary] = useState(null);
 
   // Identical arguments must give an identical function, or ApiKeyManager's
@@ -48,20 +52,6 @@ const DashboardLayout = () => {
               unlimited: Boolean(data.unlimited),
             },
     });
-  }, []);
-
-  useEffect(() => {
-    // Fire once on mount. An expired session is handled by the 401
-    // interceptor, which clears it and sends the browser to /login.
-    const load = async () => {
-      try {
-        setAccount(await cloud.me());
-      } catch {
-        // Nothing to show in the header; the interceptor has the rest.
-      }
-    };
-
-    load();
   }, []);
 
   const stats = useMemo(() => {
@@ -114,6 +104,7 @@ const DashboardLayout = () => {
 
   const signOut = () => {
     cloud.logout();
+    clearAccount();
     navigate('/login', { replace: true });
   };
 
