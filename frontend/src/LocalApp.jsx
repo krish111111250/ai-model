@@ -4,8 +4,6 @@ import LocalSidebar from '@/components/local/LocalSidebar';
 import SetupGate from '@/components/local/SetupGate';
 import { api } from '@/services/api';
 
-const USER_ID = 'test_user_01';
-
 /**
  * Part 2 shell: the local chat UI served from the customer's own machine.
  *
@@ -22,7 +20,7 @@ const LocalApp = () => {
 
   const loadDocuments = useCallback(async () => {
     try {
-      const data = await api.getDocuments(USER_ID);
+      const data = await api.getDocuments();
       const list = data.documents || [];
 
       setDocuments(list);
@@ -74,7 +72,6 @@ const LocalApp = () => {
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <LocalSidebar
-        userId={USER_ID}
         documents={documents}
         selectedDocumentId={selectedDocumentId}
         onSelectDocument={setSelectedDocumentId}
@@ -83,7 +80,6 @@ const LocalApp = () => {
       />
 
       <ChatArea
-        userId={USER_ID}
         sessionId={sessionId}
         documents={documents}
         selectedDocumentId={selectedDocumentId}

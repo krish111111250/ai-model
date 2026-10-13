@@ -8,7 +8,6 @@ import {
   WifiOff,
 } from 'lucide-react';
 import ConfirmModal from '@/components/ui/ConfirmModal';
-import { useAccount } from '@/hooks/useAccount';
 import { api } from '@/services/api';
 
 /** "2026-10-09T17:40:40" -> "2026-10-09". Null stays null. */
@@ -48,11 +47,8 @@ const STATUS = {
 const DocumentManager = () => {
   const fileInput = useRef(null);
 
-  // The gateway stores documents under whatever id it is given, so this is
-  // the key the whole list is scoped by. user_id rather than email: it is
-  // stable even if the address on the account ever changes.
-  const { account, loading: accountLoading, signedIn } = useAccount();
-  const userId = account?.user_id || '';
+  // No identity is passed to the gateway: it derives the owner from the API
+  // key it holds, so a browser cannot ask for someone else's documents.
 
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -64,12 +60,8 @@ const DocumentManager = () => {
   const [docToDelete, setDocToDelete] = useState(null);
 
   const loadDocuments = useCallback(async () => {
-    // Guard rather than default: sending an empty or undefined id would read
-    // and write under a different scope than the one the user owns.
-    if (!userId) return;
-
     try {
-      const data = await api.getDocuments(userId);
+      const data = await api.getDocuments();
 
       setDocuments(data.documents || []);
       setOffline(false);
@@ -80,35 +72,28 @@ const DocumentManager = () => {
       setOffline(problem.status === 500 || problem.status === 0);
       setError(problem.message || 'Could not load documents.');
     }
-    // userId belongs here: without it this callback keeps closing over the
-    // empty id from the first render, so the effect never re-runs once the
-    // account arrives and the list stays empty.
-  }, [userId]);
+  }, []);
 
   useEffect(() => {
-    // Wait for the identity before the first read. Without this the list
-    // would load empty, then reload once the account arrived.
-    if (accountLoading) return;
-
     const bootstrap = async () => {
       await loadDocuments();
       setLoading(false);
     };
 
     bootstrap();
-  }, [accountLoading, loadDocuments]);
+  }, [loadDocuments]);
 
   const handleUpload = async (event) => {
     const file = event.target.files?.[0];
 
-    if (!file || !userId) return;
+    if (!file) return;
 
     setUploading(true);
     setNotice('');
     setError('');
 
     try {
-      const result = await api.uploadDocument(file, userId);
+      const result = await api.uploadDocument(file);
 
       await loadDocuments();
 
@@ -136,13 +121,13 @@ const DocumentManager = () => {
   const confirmDelete = async () => {
     const doc = docToDelete;
 
-    if (!doc || deletingId || !userId) return;
+    if (!doc || deletingId) return;
 
     setDeletingId(doc.document_id);
     setError('');
 
     try {
-      await api.deleteDocument(doc.document_id, userId);
+      await api.deleteDocument(doc.document_id);
       await loadDocuments();
       setNotice(`${doc.file_name} removed from this machine.`);
     } catch (problem) {
@@ -174,7 +159,7 @@ const DocumentManager = () => {
         <button
           type="button"
           onClick={() => fileInput.current?.click()}
-          disabled={uploading || offline || !userId}
+          disabled={uploading || offline}
           className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {uploading ? (
@@ -185,25 +170,6 @@ const DocumentManager = () => {
           {uploading ? 'Indexing...' : 'Upload document'}
         </button>
       </div>
-
-      {accountLoading && (
-        <div className="mt-5 flex items-center justify-center rounded-xl border border-border py-10">
-          <Loader2 className="size-4 animate-spin text-muted-foreground" />
-        </div>
-      )}
-
-      {!accountLoading && !signedIn && (
-        <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-border bg-card px-4 py-3">
-          <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <div>
-            <p className="text-sm font-medium">Sign in to see your documents</p>
-            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-              Documents are listed per account, so this needs a signed-in
-              session.
-            </p>
-          </div>
-        </div>
-      )}
 
       {offline && (
         <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-border bg-card px-4 py-3">
@@ -234,11 +200,7 @@ const DocumentManager = () => {
 
       {/* Scrolls sideways rather than forcing the page wide on a phone; the
           less critical columns drop out at sm and md first. */}
-      <div
-        className={`mt-5 overflow-x-auto rounded-xl border border-border ${
-          accountLoading || !userId ? 'hidden' : ''
-        }`}
-      >
+      <div className="mt-5 overflow-x-auto rounded-xl border border-border">
         <table className="w-full min-w-[32rem] text-left text-sm">
           <thead className="border-b border-border bg-card">
             <tr className="text-xs uppercase tracking-wider text-muted-foreground">
@@ -341,12 +303,10 @@ const DocumentManager = () => {
         </table>
       </div>
 
-      {userId && !accountLoading && (
-        <p className="mt-3 text-xs text-muted-foreground">
-          Deleting a document removes its index from this machine. There is no
-          server-side copy to restore from.
-        </p>
-      )}
+      <p className="mt-3 text-xs text-muted-foreground">
+        Deleting a document removes its index from this machine. There is no
+        server-side copy to restore from.
+      </p>
 
       <ConfirmModal
         isOpen={Boolean(docToDelete)}

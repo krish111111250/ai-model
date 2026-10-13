@@ -132,10 +132,162 @@ def load_config() -> dict:
     api_key = os.environ.get("KRISH_API_KEY") or config.get("api_key") or ""
     engine_url = os.environ.get("KRISH_API_URL") or config.get("engine_url") or ENGINE_URL
 
-    return {"api_key": api_key.strip(), "engine_url": engine_url.rstrip("/")}
+    return {
+        "api_key": api_key.strip(),
+        "engine_url": engine_url.rstrip("/"),
+        "owner_id": (config.get("owner_id") or "").strip(),
+    }
 
 
 CONFIG = load_config()
+
+
+# -----------------------------
+# OWNER IDENTITY
+# -----------------------------
+# Everything this gateway stores belongs to the account whose API key it runs
+# with. Nothing a client sends decides that: a browser on this machine could
+# otherwise ask for any user_id and read another person's documents.
+#
+# Two people sharing one machine get two gateways - separate KRISH_HOME, port
+# and key - because that is the unit a local-first app isolates on. One process
+# serves one account.
+_owner = {"id": "", "source": ""}
+
+
+def derived_owner(api_key: str) -> str:
+    """
+    A stable id from the key alone, for when the engine cannot be reached.
+
+    Deterministic, so a gateway that starts offline scopes its data the same
+    way every time rather than picking a new identity per boot.
+    """
+    digest = hashlib.sha256((api_key or "").encode()).hexdigest()
+
+    return f"local_{digest[:16]}"
+
+
+async def resolve_owner() -> str:
+    """
+    Ask the engine whose key this is, and remember the answer.
+
+    The engine's tenant id is tied to the account, not the key, so rotating a
+    key keeps the same documents. That is worth a round trip at startup; the
+    answer is cached in config.json so later starts need none, and an offline
+    start falls back to the key-derived id.
+    """
+    if _owner["id"]:
+        return _owner["id"]
+
+    api_key = CONFIG["api_key"]
+
+    if not api_key:
+        return ""
+
+    stored = CONFIG.get("owner_id") or ""
+
+    if stored:
+        _owner.update(id=stored, source="config")
+        return stored
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                f"{CONFIG['engine_url']}/v1/keys/me",
+                headers={"X-API-Key": api_key},
+            )
+
+        if response.status_code == 200:
+            tenant = (response.json().get("tenant_id") or "").strip()
+
+            if tenant:
+                _owner.update(id=tenant, source="engine")
+                remember_owner(tenant)
+
+                return tenant
+    except Exception as error:
+        print(f"⚠️  could not ask the engine whose key this is ({error})")
+
+    fallback = derived_owner(api_key)
+    _owner.update(id=fallback, source="derived")
+
+    # Deliberately not persisted: a later start that reaches the engine should
+    # be able to adopt the real tenant id and migrate this data onto it.
+    return fallback
+
+
+def remember_owner(owner_id: str):
+    """Persist the resolved identity so later starts need no round trip."""
+    config_file = HOME / "config.json"
+
+    try:
+        stored = json.loads(config_file.read_text()) if config_file.exists() else {}
+    except Exception:
+        stored = {}
+
+    stored["owner_id"] = owner_id
+    CONFIG["owner_id"] = owner_id
+
+    HOME.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(json.dumps(stored, indent=2))
+    config_file.chmod(0o600)
+
+
+def owner_id() -> str:
+    """
+    The owner for this request. Never taken from the client.
+
+    Resolved at startup; this is the synchronous read used by every endpoint.
+    """
+    return _owner["id"] or derived_owner(CONFIG["api_key"])
+
+
+def adopt_existing_data(owner: str):
+    """
+    Move anything stored under a previous identity onto this one.
+
+    The gateway serves one account, so every row here belongs to it however it
+    was labelled - by the hardcoded test_user_01 of earlier builds, by a
+    browser-supplied account id, or by the offline fallback. Without this,
+    switching to key-derived scoping would make a user's documents vanish.
+    """
+    moved = {}
+
+    with connect() as connection:
+        for table in ("documents", "sessions", "messages"):
+            result = connection.execute(
+                f"UPDATE {table} SET user_id = ? WHERE user_id != ?", (owner, owner)
+            )
+
+            if result.rowcount:
+                moved[table] = result.rowcount
+
+    # The chunk metadata carries the same label, and retrieval filters on it.
+    for store in (collection(), cli.get_semantic_collection(HOME)):
+        try:
+            records = store.get(include=["metadatas"])
+            ids = records.get("ids") or []
+            metadatas = records.get("metadatas") or []
+
+            stale_ids = []
+            updated = []
+
+            for index, chunk_id in enumerate(ids):
+                metadata = dict(metadatas[index] or {})
+
+                if metadata.get("user_id") != owner:
+                    metadata["user_id"] = owner
+                    stale_ids.append(chunk_id)
+                    updated.append(metadata)
+
+            if stale_ids:
+                store.update(ids=stale_ids, metadatas=updated)
+                moved[store.name] = len(stale_ids)
+        except Exception as error:
+            print(f"⚠️  could not relabel chunks in {store.name}: {error}")
+
+    if moved:
+        print(f"🔁 adopted existing data as {owner}: {moved}")
 
 
 def require_engine_key() -> str:
@@ -257,9 +409,13 @@ def where_clause(conditions: List[dict]):
     return {"$and": conditions}
 
 
-def document_filter(user_id: str, mode: str, document_id, document_ids):
-    """Translate the UI's document selection into a metadata filter."""
-    scope = [{"user_id": user_id}]
+def document_filter(mode: str, document_id, document_ids):
+    """
+    Translate the UI's document selection into a metadata filter.
+
+    The owner is always this gateway's, never the caller's choice.
+    """
+    scope = [{"user_id": owner_id()}]
 
     if mode == "single":
         if not document_id:
@@ -356,6 +512,14 @@ async def lifespan(_app: FastAPI):
     print(f"   engine:     {CONFIG['engine_url']}")
     print(f"   api key:    {'set' if CONFIG['api_key'] else 'MISSING - set KRISH_API_KEY'}")
     print(f"   listening:  http://localhost:{PORT}\n")
+
+    owner = await resolve_owner()
+
+    if owner:
+        print(f"   owner:      {owner} (from the API key)")
+        adopt_existing_data(owner)
+    else:
+        print("   owner:      unresolved - no API key configured yet")
 
     reconcile_store()
 
@@ -559,7 +723,9 @@ def clean_file_name(name: str) -> str:
 @app.post("/upload")
 async def upload(
     file: UploadFile = File(...),
-    user_id: str = Form("test_user_01"),
+    # Accepted and ignored. Older clients post one; the owner comes from the
+    # API key either way.
+    user_id: str = Form(""),
 ):
     """Index a PDF locally. The file is read, chunked, embedded and discarded."""
     file_name = clean_file_name(file.filename or "")
@@ -579,11 +745,12 @@ async def upload(
         )
 
     digest = hashlib.sha256(content).hexdigest()
+    owner = owner_id()
 
     with connect() as connection:
         existing = connection.execute(
             "SELECT document_id, file_name FROM documents WHERE user_id = ? AND sha256 = ?",
-            (user_id, digest),
+            (owner, digest),
         ).fetchone()
 
     if existing:
@@ -620,7 +787,7 @@ async def upload(
         metadatas=[
             {
                 "document_id": document_id,
-                "user_id": user_id,
+                "user_id": owner,
                 "file_name": file_name,
                 "page": chunk["page"],
                 "section": chunk["section"],
@@ -643,7 +810,7 @@ async def upload(
                 "INSERT INTO documents (document_id, user_id, file_name, pages, "
                 "total_chunks, size_bytes, sha256, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (document_id, user_id, file_name, pages, len(chunks),
+                (document_id, owner, file_name, pages, len(chunks),
                  len(content), digest, now()),
             )
     except Exception:
@@ -672,12 +839,12 @@ async def upload(
 
 
 @app.get("/documents")
-async def list_documents(user_id: str = Query("test_user_01")):
+async def list_documents(user_id: str = Query("")):
     with connect() as connection:
         rows = connection.execute(
             "SELECT document_id, file_name, pages, total_chunks, size_bytes, "
             "created_at FROM documents WHERE user_id = ? ORDER BY created_at DESC",
-            (user_id,),
+            (owner_id(),),
         ).fetchall()
 
     # Which chunks the semantic half has caught up on. One read for the whole
@@ -719,7 +886,8 @@ async def list_documents(user_id: str = Query("test_user_01")):
 
 class RenameRequest(BaseModel):
     new_file_name: str
-    user_id: str = "test_user_01"
+    # Accepted and ignored, for clients that still send it.
+    user_id: str = ""
 
 
 @app.patch("/documents/{document_id}/rename")
@@ -729,7 +897,7 @@ async def rename_document(document_id: str, body: RenameRequest):
     with connect() as connection:
         row = connection.execute(
             "SELECT document_id FROM documents WHERE document_id = ? AND user_id = ?",
-            (document_id, body.user_id),
+            (document_id, owner_id()),
         ).fetchone()
 
         if not row:
@@ -738,7 +906,7 @@ async def rename_document(document_id: str, body: RenameRequest):
         clash = connection.execute(
             "SELECT document_id FROM documents WHERE user_id = ? AND file_name = ? "
             "AND document_id != ?",
-            (body.user_id, file_name, document_id),
+            (owner_id(), file_name, document_id),
         ).fetchone()
 
         if clash:
@@ -778,11 +946,11 @@ async def rename_document(document_id: str, body: RenameRequest):
 
 
 @app.delete("/documents/{document_id}")
-async def delete_document(document_id: str, user_id: str = Query("test_user_01")):
+async def delete_document(document_id: str, user_id: str = Query("")):
     with connect() as connection:
         row = connection.execute(
             "SELECT file_name FROM documents WHERE document_id = ? AND user_id = ?",
-            (document_id, user_id),
+            (document_id, owner_id()),
         ).fetchone()
 
         if not row:
@@ -812,19 +980,20 @@ class ChatRequest(BaseModel):
     query: str
     language: str = "english"
     session_id: str = "test_session_01"
-    user_id: str = "test_user_01"
+    # Accepted and ignored. Scoping comes from the API key.
+    user_id: str = ""
     document_mode: str = "single"
     document_id: Optional[str] = None
     document_ids: List[str] = []
 
 
-def save_message(connection, session_id, user_id, role, content, sources=None, labels=None):
+def save_message(connection, session_id, role, content, sources=None, labels=None):
     connection.execute(
         "INSERT INTO messages (session_id, user_id, role, content, sources, "
         "source_labels, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             session_id,
-            user_id,
+            owner_id(),
             role,
             content,
             json.dumps(sources or []),
@@ -865,7 +1034,7 @@ def touch_session(connection, body: ChatRequest):
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             body.session_id,
-            body.user_id,
+            owner_id(),
             title or "Untitled Chat",
             body.document_mode,
             body.document_id,
@@ -1013,8 +1182,8 @@ async def chat(body: ChatRequest):
 
         with connect() as connection:
             touch_session(connection, body)
-            save_message(connection, body.session_id, body.user_id, "user", question)
-            save_message(connection, body.session_id, body.user_id, "bot", answer)
+            save_message(connection, body.session_id, "user", question)
+            save_message(connection, body.session_id, "bot", answer)
 
         return {
             "answer": answer,
@@ -1026,7 +1195,7 @@ async def chat(body: ChatRequest):
 
     started = time.time()
 
-    scope = document_filter(body.user_id, mode, body.document_id, body.document_ids)
+    scope = document_filter(mode, body.document_id, body.document_ids)
 
     # None means "no score to judge", which is the right answer for a document
     # spread: it is deliberately not a similarity match, so the floor must not
@@ -1131,11 +1300,10 @@ async def chat(body: ChatRequest):
 
     with connect() as connection:
         touch_session(connection, body)
-        save_message(connection, body.session_id, body.user_id, "user", question)
+        save_message(connection, body.session_id, "user", question)
         save_message(
             connection,
             body.session_id,
-            body.user_id,
             "bot",
             answer,
             sources,
@@ -1163,13 +1331,13 @@ async def chat(body: ChatRequest):
 
 
 @app.get("/chat-sessions")
-async def chat_sessions(user_id: str = Query("test_user_01")):
+async def chat_sessions(user_id: str = Query("")):
     with connect() as connection:
         rows = connection.execute(
             "SELECT session_id, title, document_mode, document_id, document_ids, "
             "created_at, updated_at FROM sessions WHERE user_id = ? "
             "ORDER BY updated_at DESC",
-            (user_id,),
+            (owner_id(),),
         ).fetchall()
 
     sessions = []
@@ -1188,12 +1356,12 @@ async def chat_sessions(user_id: str = Query("test_user_01")):
 
 
 @app.get("/chat-history/{session_id}")
-async def chat_history(session_id: str, user_id: str = Query("test_user_01")):
+async def chat_history(session_id: str, user_id: str = Query("")):
     with connect() as connection:
         rows = connection.execute(
             "SELECT role, content, sources, source_labels, created_at FROM messages "
             "WHERE session_id = ? AND user_id = ? ORDER BY id ASC",
-            (session_id, user_id),
+            (session_id, owner_id()),
         ).fetchall()
 
     messages = []
@@ -1213,16 +1381,16 @@ async def chat_history(session_id: str, user_id: str = Query("test_user_01")):
 
 
 @app.delete("/chat-sessions/{session_id}")
-async def delete_session(session_id: str, user_id: str = Query("test_user_01")):
+async def delete_session(session_id: str, user_id: str = Query("")):
     with connect() as connection:
         row = connection.execute(
             "SELECT session_id FROM sessions WHERE session_id = ? AND user_id = ?",
-            (session_id, user_id),
+            (session_id, owner_id()),
         ).fetchone()
 
         deleted = connection.execute(
             "DELETE FROM messages WHERE session_id = ? AND user_id = ?",
-            (session_id, user_id),
+            (session_id, owner_id()),
         ).rowcount
 
         if row:

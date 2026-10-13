@@ -33,7 +33,6 @@ const SectionLabel = ({ children }) => (
 );
 
 const LocalSidebar = ({
-  userId,
   documents,
   selectedDocumentId,
   onSelectDocument,
@@ -56,7 +55,7 @@ const LocalSidebar = ({
     setNotice('');
 
     try {
-      const result = await api.uploadDocument(file, userId);
+      const result = await api.uploadDocument(file);
 
       await onDocumentsChanged?.();
       onSelectDocument?.(result.document_id);
@@ -91,7 +90,7 @@ const LocalSidebar = ({
     setNotice('');
 
     try {
-      await api.deleteDocument(doc.document_id, userId);
+      await api.deleteDocument(doc.document_id);
       await onDocumentsChanged?.();
     } catch (problem) {
       setNotice(problem.message || 'Delete failed.');

@@ -204,10 +204,11 @@ export const api = {
     }
   },
 
-  uploadDocument: async (file, userId = 'test_user_01') => {
+  // No user id: the gateway derives the owner from the API key it holds, so
+  // anything sent here would be ignored.
+  uploadDocument: async (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('user_id', userId);
 
     try {
       const response = await client.post('/upload', formData, {
@@ -230,11 +231,9 @@ export const api = {
     }
   },
 
-  getDocuments: async (userId = 'test_user_01') => {
+  getDocuments: async () => {
     try {
-      const response = await client.get('/documents', {
-        params: { user_id: userId },
-      });
+      const response = await client.get('/documents');
 
       return response.data;
     } catch (error) {
@@ -252,15 +251,10 @@ export const api = {
     }
   },
 
-  renameDocument: async ({
-    documentId,
-    newFileName,
-    userId = 'test_user_01',
-  }) => {
+  renameDocument: async ({ documentId, newFileName }) => {
     try {
       const response = await client.patch(`/documents/${documentId}/rename`, {
         new_file_name: newFileName,
-        user_id: userId,
       });
 
       return response.data;
@@ -279,11 +273,9 @@ export const api = {
     }
   },
 
-  deleteDocument: async (documentId, userId = 'test_user_01') => {
+  deleteDocument: async (documentId) => {
     try {
-      const response = await client.delete(`/documents/${documentId}`, {
-        params: { user_id: userId },
-      });
+      const response = await client.delete(`/documents/${documentId}`);
 
       return response.data;
     } catch (error) {
@@ -305,7 +297,6 @@ export const api = {
     query,
     language = 'english',
     sessionId = 'test_session_01',
-    userId = 'test_user_01',
     documentId = null,
     documentIds = [],
     documentMode = 'single',
@@ -350,7 +341,6 @@ export const api = {
       query,
       language: normalizedLanguage,
       session_id: sessionId,
-      user_id: userId,
       document_mode: normalizedDocumentMode,
       document_id: finalDocumentId,
       document_ids: finalDocumentIds,
@@ -427,11 +417,9 @@ export const api = {
     }
   },
 
-  getChatSessions: async (userId = 'test_user_01') => {
+  getChatSessions: async () => {
     try {
-      const response = await client.get('/chat-sessions', {
-        params: { user_id: userId },
-      });
+      const response = await client.get('/chat-sessions');
 
       return response.data;
     } catch (error) {
@@ -449,11 +437,9 @@ export const api = {
     }
   },
 
-  getChatHistory: async (sessionId, userId = 'test_user_01') => {
+  getChatHistory: async (sessionId) => {
     try {
-      const response = await client.get(`/chat-history/${sessionId}`, {
-        params: { user_id: userId },
-      });
+      const response = await client.get(`/chat-history/${sessionId}`);
 
       return response.data;
     } catch (error) {
@@ -471,11 +457,9 @@ export const api = {
     }
   },
 
-  deleteChatSession: async (sessionId, userId = 'test_user_01') => {
+  deleteChatSession: async (sessionId) => {
     try {
-      const response = await client.delete(`/chat-sessions/${sessionId}`, {
-        params: { user_id: userId },
-      });
+      const response = await client.delete(`/chat-sessions/${sessionId}`);
 
       return response.data;
     } catch (error) {

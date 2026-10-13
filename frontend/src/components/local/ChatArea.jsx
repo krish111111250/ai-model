@@ -11,7 +11,6 @@ import { api } from '@/services/api';
  * composer off the bottom of the screen as a conversation grows.
  */
 const ChatArea = ({
-  userId,
   sessionId,
   documents,
   selectedDocumentId,
@@ -49,7 +48,6 @@ const ChatArea = ({
       const response = await api.sendChatMessage({
         query,
         sessionId,
-        userId,
         documentId: selectedDocumentId,
         documentMode: 'single',
       });
