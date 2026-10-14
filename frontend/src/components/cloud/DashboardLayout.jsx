@@ -4,11 +4,12 @@ import { Activity, KeyRound, Loader2 } from 'lucide-react';
 import ApiKeyManager from '@/components/cloud/ApiKeyManager';
 import ApiPlayground from '@/components/cloud/ApiPlayground';
 import BillingManager from '@/components/cloud/BillingManager';
+import Skeleton from '@/components/ui/Skeleton';
 import DocumentManager from '@/components/cloud/DocumentManager';
 import { clearAccount, useAccount } from '@/hooks/useAccount';
 import { cloud } from '@/services/api';
 
-const StatCard = ({ icon: Icon, label, value, note }) => (
+const StatCard = ({ icon: Icon, label, value, note, loading }) => (
   <div className="rounded-xl border border-border bg-card p-5">
     <div className="flex items-center gap-2">
       <Icon className="size-4 text-muted-foreground" />
@@ -17,8 +18,19 @@ const StatCard = ({ icon: Icon, label, value, note }) => (
       </p>
     </div>
 
-    <p className="mt-3 text-2xl font-semibold tracking-tight">{value}</p>
-    <p className="mt-1 text-xs text-muted-foreground">{note}</p>
+    {loading ? (
+      <>
+        {/* Sized like the figures they stand in for, so the card does not
+            change height when the numbers arrive. */}
+        <Skeleton className="mt-3 h-7 w-24" />
+        <Skeleton className="mt-2 h-3 w-36" />
+      </>
+    ) : (
+      <>
+        <p className="mt-3 text-2xl font-semibold tracking-tight">{value}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{note}</p>
+      </>
+    )}
   </div>
 );
 
@@ -233,7 +245,7 @@ const DashboardLayout = () => {
 
         <section className="mt-6 grid gap-4 sm:grid-cols-2">
           {stats.map((stat) => (
-            <StatCard key={stat.label} {...stat} />
+            <StatCard key={stat.label} {...stat} loading={!summary} />
           ))}
         </section>
 

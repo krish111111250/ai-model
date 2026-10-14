@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner';
 import ConfirmModal from '@/components/ui/ConfirmModal';
 import EmptyState from '@/components/ui/EmptyState';
+import { SkeletonRows } from '@/components/ui/Skeleton';
 import { api } from '@/services/api';
 
 /** "2026-10-09T17:40:40" -> "2026-10-09". Null stays null. */
@@ -234,11 +235,18 @@ const DocumentManager = ({ onDocuments }) => {
 
           <tbody>
             {loading && (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center">
-                  <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />
-                </td>
-              </tr>
+              <SkeletonRows
+                rows={3}
+                columns={[
+                  // Two bars: the filename and the "N pages - N chunks" line
+                  // underneath it.
+                  { width: 'w-44', second: 'w-24' },
+                  { width: 'w-12', className: 'hidden sm:table-cell' },
+                  { width: 'w-20', className: 'hidden md:table-cell' },
+                  { width: 'w-16' },
+                  { width: 'ml-auto w-6' },
+                ]}
+              />
             )}
 
             {!loading &&

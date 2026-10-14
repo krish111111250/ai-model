@@ -3,6 +3,7 @@ import { Check, Copy, KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import ConfirmModal from '@/components/ui/ConfirmModal';
 import EmptyState from '@/components/ui/EmptyState';
+import { SkeletonRows } from '@/components/ui/Skeleton';
 import PromptModal from '@/components/ui/PromptModal';
 import { cloud } from '@/services/api';
 
@@ -237,11 +238,17 @@ const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
 
           <tbody>
             {loading && (
-              <tr>
-                <td colSpan={6} className="px-5 py-10 text-center">
-                  <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />
-                </td>
-              </tr>
+              <SkeletonRows
+                rows={3}
+                columns={[
+                  { width: 'w-28' },
+                  { width: 'w-32' },
+                  { width: 'w-20', className: 'hidden sm:table-cell' },
+                  { width: 'w-20', className: 'hidden md:table-cell' },
+                  { width: 'w-24', className: 'hidden lg:table-cell' },
+                  { width: 'ml-auto w-6' },
+                ]}
+              />
             )}
 
             {!loading &&

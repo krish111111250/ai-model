@@ -65,6 +65,40 @@
   --ring: #d4d4d4;
 }
 
+/* A sweep across a placeholder block, rather than Tailwind's pulse. The
+   gradient uses --accent so it stays inside the monochrome palette, and it
+   stops entirely for anyone who has asked for less motion. */
+@keyframes krish-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent),
+    transparent
+  );
+  animation: krish-shimmer 1.6s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer::after {
+    animation: none;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   Code2,
+  Copy,
   CornerDownLeft,
   FileText,
   Loader2,
   Send,
   Sparkles,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import JsonBlock from '@/components/ui/JsonBlock';
 import { api } from '@/services/api';
 
 /**
@@ -31,6 +34,10 @@ const ApiPlayground = ({ documents = [] }) => {
   // A session of its own, so trying things here does not land in the
   // conversation list of the chat app.
   const sessionId = useMemo(() => `playground_${Date.now()}`, []);
+
+  // Shown in the request block, so it matches wherever the gateway actually is.
+  const gatewayUrl =
+    import.meta.env.VITE_KRISH_GATEWAY_URL || 'http://localhost:8001';
 
   // Keep a valid selection: the gateway cannot answer in single-document
   // mode without one, and a stale id would point at a deleted document.
@@ -109,6 +116,17 @@ const ApiPlayground = ({ documents = [] }) => {
     }
   };
 
+  const copyAnswer = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Answer copied');
+    } catch {
+      toast.error('Could not copy', {
+        description: 'Select the text and copy it manually.',
+      });
+    }
+  };
+
   const handleKeyDown = (event) => {
     // Enter sends, Shift+Enter breaks the line - what every chat input does.
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -172,12 +190,14 @@ const ApiPlayground = ({ documents = [] }) => {
       </div>
 
       {showRequest && (
-        <pre className="mt-4 overflow-x-auto rounded-xl border border-border bg-card p-4 font-mono text-[11px] leading-relaxed text-muted-foreground">
-{`POST http://localhost:8001/chat
-Content-Type: application/json
-
-${requestBody}`}
-        </pre>
+        <div className="mt-4">
+          <JsonBlock
+            prefix={`POST ${gatewayUrl}/chat
+Content-Type: application/json`}
+            code={requestBody}
+            onCopied={() => toast.success('Request copied')}
+          />
+        </div>
       )}
 
       <div className="mt-5 flex h-[26rem] flex-col rounded-xl border border-border">
@@ -202,10 +222,10 @@ ${requestBody}`}
               return (
                 <div
                   key={index}
-                  className={`flex ${mine ? 'justify-end' : 'justify-start'}`}
+                  className={`group flex ${mine ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                    className={`relative max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                       mine
                         ? 'bg-primary text-primary-foreground'
                         : message.failed
@@ -213,6 +233,21 @@ ${requestBody}`}
                           : 'border border-border bg-card text-card-foreground'
                     }`}
                   >
+                    {/* Only on answers: there is no use in copying back a
+                        question the user just typed. Hidden until the row is
+                        hovered or the button takes focus, so it does not sit
+                        over the text. */}
+                    {!mine && !message.failed && (
+                      <button
+                        type="button"
+                        onClick={() => copyAnswer(message.content)}
+                        aria-label="Copy answer"
+                        className="absolute -right-1 -top-1 rounded-md border border-border bg-card p-1.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                      >
+                        <Copy className="size-3" />
+                      </button>
+                    )}
+
                     <p className="whitespace-pre-wrap">{message.content}</p>
 
                     {message.labels?.length > 0 && (
