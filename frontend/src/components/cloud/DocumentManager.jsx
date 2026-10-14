@@ -7,7 +7,9 @@ import {
   Upload,
   WifiOff,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import ConfirmModal from '@/components/ui/ConfirmModal';
+import EmptyState from '@/components/ui/EmptyState';
 import { api } from '@/services/api';
 
 /** "2026-10-09T17:40:40" -> "2026-10-09". Null stays null. */
@@ -54,7 +56,6 @@ const DocumentManager = ({ onDocuments }) => {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState('');
-  const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [offline, setOffline] = useState(false);
   const [docToDelete, setDocToDelete] = useState(null);
@@ -94,7 +95,6 @@ const DocumentManager = ({ onDocuments }) => {
     if (!file) return;
 
     setUploading(true);
-    setNotice('');
     setError('');
 
     try {
@@ -102,18 +102,20 @@ const DocumentManager = ({ onDocuments }) => {
 
       await loadDocuments();
 
-      setNotice(
-        result.semantic_pending
-          ? `${result.file_name} indexed. Semantic search is still initializing.`
-          : `${result.file_name}: ${result.total_chunks} chunks from ${result.pages} page(s).`
-      );
+      toast.success(`${result.file_name} indexed`, {
+        description: result.semantic_pending
+          ? 'Searchable now by keyword; semantic search is still initializing.'
+          : `${result.total_chunks} chunks from ${result.pages} page(s), all on this machine.`,
+      });
     } catch (problem) {
       // 409 is the gateway saying this exact file is already indexed, which
       // is worth saying plainly rather than reporting as a failure.
       if (problem.status === 409) {
-        setNotice('Already indexed - it is in the list below.');
+        toast('Already indexed', {
+          description: 'That exact file is in the list below.',
+        });
       } else {
-        setError(problem.message || 'Upload failed.');
+        toast.error('Upload failed', { description: problem.message });
       }
     } finally {
       setUploading(false);
@@ -134,9 +136,12 @@ const DocumentManager = ({ onDocuments }) => {
     try {
       await api.deleteDocument(doc.document_id);
       await loadDocuments();
-      setNotice(`${doc.file_name} removed from this machine.`);
+
+      toast.success(`${doc.file_name} deleted`, {
+        description: 'Its index is gone from this machine.',
+      });
     } catch (problem) {
-      setError(problem.message || 'Delete failed.');
+      toast.error('Delete failed', { description: problem.message });
     } finally {
       setDeletingId('');
       setDocToDelete(null);
@@ -176,35 +181,45 @@ const DocumentManager = ({ onDocuments }) => {
         </button>
       </div>
 
-      {offline && (
-        <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-border bg-card px-4 py-3">
-          <WifiOff className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <div>
-            <p className="text-sm font-medium">Local app not running</p>
-            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-              Documents live on your machine, so this list comes from the
-              gateway on port 8001. Start it with{' '}
-              <code className="rounded bg-secondary px-1 py-0.5">./start.sh</code>{' '}
-              and reload.
-            </p>
-          </div>
-        </div>
-      )}
-
       {error && !offline && (
         <p className="mt-4 rounded-lg border border-border bg-destructive px-4 py-2.5 text-sm text-destructive-foreground">
           {error}
         </p>
       )}
 
-      {notice && (
-        <p className="mt-4 rounded-lg border border-border bg-card px-4 py-2.5 text-sm text-muted-foreground">
-          {notice}
-        </p>
-      )}
-
-      {/* Scrolls sideways rather than forcing the page wide on a phone; the
-          less critical columns drop out at sm and md first. */}
+      {!loading && documents.length === 0 ? (
+        <div className="mt-5">
+          <EmptyState
+            icon={offline ? WifiOff : FileText}
+            title={offline ? 'Local app not running' : 'No documents yet'}
+            description={
+              offline
+                ? 'Your documents live on this machine, so this list comes from the gateway on port 8001.'
+                : 'Upload a PDF and it is read, split and indexed here. Only the snippets a question matches are ever sent to the engine.'
+            }
+            action={
+              offline ? null : (
+                <button
+                  type="button"
+                  onClick={() => fileInput.current?.click()}
+                  disabled={uploading}
+                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  <Upload className="size-4" />
+                  Upload your first document
+                </button>
+              )
+            }
+            hint={
+              offline
+                ? 'Start it with ./start.sh and reload this page.'
+                : 'PDFs with selectable text. A scanned page needs OCR first.'
+            }
+          />
+        </div>
+      ) : (
+      /* Scrolls sideways rather than forcing the page wide on a phone; the
+         less critical columns drop out at sm and md first. */
       <div className="mt-5 overflow-x-auto rounded-xl border border-border">
         <table className="w-full min-w-[32rem] text-left text-sm">
           <thead className="border-b border-border bg-card">
@@ -222,19 +237,6 @@ const DocumentManager = ({ onDocuments }) => {
               <tr>
                 <td colSpan={5} className="px-5 py-10 text-center">
                   <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />
-                </td>
-              </tr>
-            )}
-
-            {!loading && documents.length === 0 && (
-              <tr>
-                <td
-                  colSpan={5}
-                  className="px-5 py-10 text-center text-sm text-muted-foreground"
-                >
-                  {offline
-                    ? 'Start the local app to see your documents.'
-                    : 'No documents yet. Upload a PDF to ask questions about it.'}
                 </td>
               </tr>
             )}
@@ -307,11 +309,14 @@ const DocumentManager = ({ onDocuments }) => {
           </tbody>
         </table>
       </div>
+      )}
 
-      <p className="mt-3 text-xs text-muted-foreground">
-        Deleting a document removes its index from this machine. There is no
-        server-side copy to restore from.
-      </p>
+      {documents.length > 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Deleting a document removes its index from this machine. There is no
+          server-side copy to restore from.
+        </p>
+      )}
 
       <ConfirmModal
         isOpen={Boolean(docToDelete)}

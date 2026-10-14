@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, CreditCard, ExternalLink, Loader2, Sparkles } from 'lucide-react';
 import { cloud } from '@/services/api';
 
@@ -31,6 +31,20 @@ const BillingManager = ({ plan = 'free', quota }) => {
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState('');
 
+  // Null until the server has answered, so the button does not flicker
+  // between states on first paint.
+  const [billingLive, setBillingLive] = useState(null);
+
+  useEffect(() => {
+    const load = async () => {
+      const config = await cloud.billingConfig();
+
+      setBillingLive(Boolean(config.enabled));
+    };
+
+    load();
+  }, []);
+
   const unlimited = Boolean(quota?.unlimited) || quota?.limit === null;
   const used = quota?.used ?? 0;
   const limit = quota?.limit ?? null;
@@ -45,7 +59,12 @@ const BillingManager = ({ plan = 'free', quota }) => {
   // buys it nothing is the kind of contradiction people stop trusting a
   // billing page over.
   const exempt = unlimited && !isPro;
-  const showUpgrade = !isPro && !unlimited;
+
+  // Only offer a checkout that can actually complete. With no Stripe keys on
+  // the server the button would reach the endpoint and come back "billing is
+  // not configured", which is a worse answer than not asking.
+  const showUpgrade = !isPro && !unlimited && billingLive === true;
+  const billingOffline = billingLive === false && !isPro && !unlimited;
 
   const manage = async () => {
     if (opening) return;
@@ -222,6 +241,11 @@ const BillingManager = ({ plan = 'free', quota }) => {
               )}
               {opening ? 'Opening portal...' : 'Manage subscription'}
             </button>
+          ) : billingOffline ? (
+            <p className="mt-6 text-xs leading-relaxed text-muted-foreground">
+              Paid plans are not open yet. Everything here is free during the
+              beta, with the free tier's monthly limit.
+            </p>
           ) : !showUpgrade ? (
             <p className="mt-6 text-xs text-muted-foreground">
               This account already has unlimited requests, so there is nothing

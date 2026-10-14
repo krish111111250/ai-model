@@ -571,6 +571,17 @@ export const cloud = {
     }
   },
 
+  // Whether this deployment has Stripe keys. Reveals nothing else, and is
+  // what lets the UI avoid offering a checkout that cannot complete.
+  billingConfig: async () => {
+    try {
+      const response = await cloudClient.get('/v1/billing/config');
+      return response.data;
+    } catch {
+      return { enabled: false };
+    }
+  },
+
   // Stripe's hosted portal: invoices, cards and cancellation. Needs a
   // stripe_customer_id, which only exists once an account has checked out.
   createPortalSession: async () => {

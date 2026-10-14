@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Copy, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Check, Copy, KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import ConfirmModal from '@/components/ui/ConfirmModal';
+import EmptyState from '@/components/ui/EmptyState';
 import PromptModal from '@/components/ui/PromptModal';
 import { cloud } from '@/services/api';
 
@@ -43,6 +45,8 @@ const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
       // above need. Handing it up beats a second request for it.
       onData?.(data);
     } catch (problem) {
+      // A failed list leaves the section with nothing to show, so this one
+      // stays inline. A toast would vanish and leave an empty table behind.
       setError(problem.message || 'Could not load API keys.');
     }
   }, [onData]);
@@ -71,9 +75,13 @@ const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
       setCopied(false);
       setNaming(false);
       await loadKeys();
+
+      toast.success('API key created', {
+        description: `${created.name} - copy it now, it cannot be shown again.`,
+      });
     } catch (problem) {
-      setError(problem.message || 'Could not generate a key.');
       // The dialog stays open on failure so the name is not lost.
+      toast.error('Could not generate a key', { description: problem.message });
     } finally {
       setGenerating(false);
     }
@@ -94,8 +102,12 @@ const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
 
       setKeyToRevoke(null);
       await loadKeys();
+
+      toast.success('Key revoked', {
+        description: `${key.name} - requests using it now fail.`,
+      });
     } catch (problem) {
-      setError(problem.message || 'Could not revoke the key.');
+      toast.error('Could not revoke the key', { description: problem.message });
       setKeyToRevoke(null);
     } finally {
       setRevokingId('');
@@ -107,9 +119,14 @@ const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
       await navigator.clipboard.writeText(freshKey.api_key);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+
+      toast.success('Key copied to clipboard');
     } catch {
-      // Clipboard is unavailable outside a secure context. The key is on
-      // screen and selectable, so this is not worth interrupting over.
+      // Clipboard access is denied outside a secure context. Say so, since
+      // the button visibly did nothing.
+      toast.error('Could not copy', {
+        description: 'Select the key and copy it manually.',
+      });
     }
   };
 
@@ -182,8 +199,29 @@ const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
         </div>
       )}
 
-      {/* Scrolls sideways rather than forcing the page wide on a phone; the
-          less critical columns drop out at sm and md first. */}
+      {!loading && keys.length === 0 && !error ? (
+        <div className="mt-5">
+          <EmptyState
+            icon={KeyRound}
+            title="No API keys yet"
+            description="A key lets your own code ask questions of your documents. The plaintext is shown once when it is created and only its hash is stored."
+            action={
+              <button
+                type="button"
+                onClick={() => setNaming(true)}
+                disabled={generating}
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
+                <Plus className="size-4" />
+                Generate your first key
+              </button>
+            }
+            hint="Send it as the X-API-Key header on /v1 requests."
+          />
+        </div>
+      ) : (
+      /* Scrolls sideways rather than forcing the page wide on a phone; the
+         less critical columns drop out at sm and md first. */
       <div className="mt-5 overflow-x-auto rounded-xl border border-border">
         <table className="w-full min-w-[32rem] text-left text-sm">
           <thead className="border-b border-border bg-card">
@@ -202,17 +240,6 @@ const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
               <tr>
                 <td colSpan={6} className="px-5 py-10 text-center">
                   <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />
-                </td>
-              </tr>
-            )}
-
-            {!loading && keys.length === 0 && (
-              <tr>
-                <td
-                  colSpan={6}
-                  className="px-5 py-10 text-center text-sm text-muted-foreground"
-                >
-                  No keys. Generate one to start making requests.
                 </td>
               </tr>
             )}
@@ -288,10 +315,13 @@ const ApiKeyManager = ({ onData, refreshKey = 0 }) => {
           </tbody>
         </table>
       </div>
+      )}
 
-      <p className="mt-3 text-xs text-muted-foreground">
-        Revoked keys are kept so past usage stays auditable.
-      </p>
+      {keys.length > 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Revoked keys are kept so past usage stays auditable.
+        </p>
+      )}
 
       <PromptModal
         isOpen={naming}
