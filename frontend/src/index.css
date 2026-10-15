@@ -153,9 +153,12 @@ body,
   background: #0a0a0a;
 }
 
-body {
-  overflow: hidden;
-}
+/* No overflow lock here. It dates from when this app was one fixed-height
+   chat screen, and it silently cut off the bottom of every page that is
+   taller than the viewport - the dashboard's playground among them.
+   The chat view does not need it: its own wrapper is h-screen with
+   overflow-hidden, and its panes scroll internally. Dialogs set
+   body.overflow themselves while open and put it back on close. */
 
 button,
 input,
