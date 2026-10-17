@@ -8,7 +8,8 @@ embeds it, stores it in ~/.krish, and searches it. The only thing that ever
 leaves this machine is the question plus the handful of chunks that matched
 it, sent to the answer engine, which stores nothing.
 
-    pip install fastapi uvicorn chromadb pymupdf httpx python-multipart
+    pip install fastapi uvicorn chromadb httpx python-multipart \
+                'markitdown[pdf,docx,pptx,xlsx]'
     export KRISH_API_KEY=krish_...          # from your account dashboard
     python3 client_gateway.py                # serves http://localhost:8001
 
@@ -59,7 +60,9 @@ AUDIO_DIR = HOME / "audio"
 
 ENGINE_URL = os.environ.get("KRISH_API_URL", "http://localhost:8000").rstrip("/")
 PORT = int(os.environ.get("KRISH_GATEWAY_PORT", "8001"))
-TOP_K = int(os.environ.get("KRISH_TOP_K", str(cli.TOP_K)))
+# cli.TOP_K already honours KRISH_TOP_K; re-reading it here would let the two
+# disagree.
+TOP_K = cli.TOP_K
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 NOT_AVAILABLE = "This information is not available in the uploaded document."
@@ -714,8 +717,14 @@ def clean_file_name(name: str) -> str:
     if len(cleaned) > 200:
         raise HTTPException(status_code=400, detail="File name is too long.")
 
-    if not cleaned.lower().endswith(".pdf"):
-        cleaned = f"{cleaned}.pdf"
+    if Path(cleaned).suffix.lower() not in cli.SUPPORTED_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported file type. Supported: "
+                + ", ".join(sorted(cli.SUPPORTED_SUFFIXES))
+            ),
+        )
 
     return cleaned
 
@@ -727,11 +736,17 @@ async def upload(
     # API key either way.
     user_id: str = Form(""),
 ):
-    """Index a PDF locally. The file is read, chunked, embedded and discarded."""
+    """
+    Index a document locally. The file is read, chunked, embedded and discarded.
+
+    MarkItDown handles the conversion, so this is no longer PDF-only - Word,
+    PowerPoint, Excel, HTML and plain text go through the same path. The
+    React file input still filters to PDF; widen its accept attribute to
+    offer the rest.
+    """
     file_name = clean_file_name(file.filename or "")
 
-    if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    # clean_file_name has already rejected an unsupported suffix.
 
     content = await file.read()
 
@@ -761,7 +776,8 @@ async def upload(
         )
 
     document_id = f"doc_{uuid.uuid4().hex[:12]}"
-    temp_path = TMP_DIR / f"{document_id}.pdf"
+    # Keep the real suffix: MarkItDown picks its converter from it.
+    temp_path = TMP_DIR / f"{document_id}{Path(file_name).suffix.lower()}"
 
     try:
         temp_path.write_bytes(content)
@@ -774,7 +790,10 @@ async def upload(
     if not chunks:
         raise HTTPException(
             status_code=400,
-            detail="No readable text found. A scanned PDF needs OCR before indexing.",
+            detail=(
+                "No readable text found. A scan with no text layer needs OCR "
+                "before it can be indexed."
+            ),
         )
 
     texts = [chunk["text"] for chunk in chunks]

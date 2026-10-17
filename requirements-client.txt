@@ -13,8 +13,11 @@ python-multipart>=0.0.9
 # Talks to the engine.
 httpx>=0.28
 
-# Reading and indexing PDFs locally.
-pymupdf>=1.27
+# Reading documents locally. MarkItDown covers PDF, Word, PowerPoint, Excel,
+# HTML and plain text through one interface; the extras are what pull in the
+# per-format readers. PDFs go through pdfminer, which separates pages with a
+# form feed - that is what keeps page citations working.
+markitdown[pdf,docx,pptx,xlsx]>=0.1.8
 chromadb>=1.5
 
 # Semantic retrieval and cross-encoder reranking. Both models are downloaded

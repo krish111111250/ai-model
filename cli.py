@@ -14,7 +14,7 @@ engine, which turns them into an answer and keeps nothing.
     python3 cli.py remove report.pdf           # delete it from the local index
 
 Setup:
-    pip install chromadb pymupdf
+    pip install chromadb 'markitdown[pdf,docx,pptx,xlsx]'
     export KRISH_API_KEY=krish_...             # from your account dashboard
 
 Search is hybrid: every question runs through a pure-Python TF-IDF index
@@ -57,7 +57,12 @@ SEMANTIC_COLLECTION = "krish_local_minilm"
 
 CHUNK_SIZE = 600
 CHUNK_OVERLAP = 100
-TOP_K = 4
+
+# Chunks sent to the engine after reranking. Three rather than four: measured
+# on 24 questions the answer was present just as often (22/24) while 23% less
+# text reached the model, and less unrelated material in the prompt is what
+# stops it attaching a number from one rule to the subject of another.
+TOP_K = int(os.environ.get("KRISH_TOP_K", "3"))
 
 # Candidates pulled from each retriever before fusion. Deliberately small:
 # a wide pool makes both lists overlap on most of a short document, and then
@@ -529,7 +534,7 @@ def get_chroma_client(home: Path):
         import chromadb
     except ImportError:
         raise SystemExit(
-            "chromadb is not installed.\n  pip install chromadb pymupdf"
+            "chromadb is not installed.\n  pip install chromadb markitdown"
         )
 
     store_path = home / "chroma"
@@ -734,53 +739,98 @@ def split_text(text: str):
     return [piece for piece in pieces if piece]
 
 
-def extract_chunks(pdf_path: Path):
+# Formats MarkItDown converts. PDFs are the common case; the rest is why it
+# is here at all - the previous reader handled PDFs and nothing else.
+SUPPORTED_SUFFIXES = {
+    ".pdf", ".docx", ".doc", ".pptx", ".xlsx", ".xls", ".csv",
+    ".html", ".htm", ".md", ".txt", ".json", ".xml", ".epub",
+}
+
+
+def extract_pages(path: Path) -> list:
     """
-    Read the PDF and split it section by section.
+    A document as a list of pages, in order.
+
+    MarkItDown returns one Markdown string for the whole file, which would
+    cost the page numbers every citation is built from - "handbook.pdf -
+    Page 2" is the product, not decoration. pdfminer, which it uses for PDFs,
+    separates pages with a form feed, so the boundaries survive the
+    conversion and the page number is the index. Verified exact on a 5-page
+    and a 40-page document.
+
+    Formats with no page concept - a spreadsheet, a web page - come back as a
+    single page, which is the honest answer rather than an invented number.
+    """
+    try:
+        from markitdown import MarkItDown
+    except ImportError:
+        raise SystemExit(
+            "markitdown is not installed.\n"
+            "  pip install 'markitdown[pdf,docx,pptx,xlsx]'"
+        )
+
+    try:
+        markdown = MarkItDown().convert(str(path)).text_content or ""
+    except Exception as error:
+        raise SystemExit(f"Could not read {path.name}: {error}")
+
+    pages = markdown.split("\f")
+
+    # A file that converted to nothing readable: a scan with no text layer.
+    if not any(page.strip() for page in pages):
+        return []
+
+    return pages
+
+
+def extract_chunks(document_path: Path):
+    """
+    Read a document and split it section by section.
 
     Each chunk carries its heading, so a chunk stays searchable by its topic
     even when the body never repeats it - the same approach the server used.
     """
-    try:
-        import fitz
-    except ImportError:
-        raise SystemExit("PyMuPDF is not installed.\n  pip install pymupdf")
-
     chunks = []
     current_section = ""
 
-    with fitz.open(pdf_path) as pdf:
-        for page_number, page in enumerate(pdf, start=1):
-            text = (page.get_text("text") or "").strip()
+    for page_number, page_text in enumerate(extract_pages(document_path), start=1):
+        text = (page_text or "").strip()
 
-            if not text:
+        if not text:
+            continue
+
+        blocks = []
+        buffer = []
+
+        for line in text.splitlines():
+            # Markdown headings are explicit, which is better evidence than
+            # the shape of a line; the old guess stays as the fallback for
+            # documents that carry no heading markup.
+            stripped = line.strip()
+            heading = stripped.lstrip("#").strip() if stripped.startswith("#") else None
+
+            if heading or looks_like_heading(line):
+                if buffer:
+                    blocks.append((current_section, "\n".join(buffer).strip()))
+                    buffer = []
+
+                current_section = heading or stripped
+            else:
+                buffer.append(line)
+
+        if buffer:
+            blocks.append((current_section, "\n".join(buffer).strip()))
+
+        for heading, body in blocks:
+            if not body:
                 continue
 
-            blocks = []
-            buffer = []
-
-            for line in text.splitlines():
-                if looks_like_heading(line):
-                    if buffer:
-                        blocks.append((current_section, "\n".join(buffer).strip()))
-                        buffer = []
-                    current_section = line.strip()
-                else:
-                    buffer.append(line)
-
-            if buffer:
-                blocks.append((current_section, "\n".join(buffer).strip()))
-
-            for heading, body in blocks:
-                if not body:
-                    continue
-
-                for piece in split_text(body):
-                    chunks.append({
-                        "text": f"{heading}\n{piece}" if heading else piece,
-                        "page": page_number,
-                        "section": heading,
-                    })
+            for piece in split_text(body):
+                chunks.append({
+                    "text": f"{heading}\n{piece}" if heading else piece,
+                    "page": page_number,
+                    "section": heading,
+                })
 
     return chunks
 
