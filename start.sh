@@ -93,6 +93,15 @@ if port_busy 8001; then
 else
   # The gateway holds the documents: it indexes and searches them on this
   # machine and sends the engine only the chunks a question matched.
+  #
+  # It is a separate process from the engine and reads no .env of its own, so
+  # the reranker settings have to be handed to it here. Without this the
+  # KRISH_RERANKER_* lines in backend/.env are documentation and nothing more.
+  # A value already exported in this shell wins, so a one-off override still
+  # works the way it did before the file became the default.
+  while IFS='=' read -r key value; do
+    [ -n "${!key+set}" ] || export "$key=$value"
+  done < <(grep -E '^KRISH_[A-Z_]+=' "$ROOT/backend/.env" 2>/dev/null)
   start_detached gateway "$ROOT" \
     "$ROOT/backend/venv/bin/python" "$ROOT/client_gateway.py"
   wait_for_port 8001 Gateway
