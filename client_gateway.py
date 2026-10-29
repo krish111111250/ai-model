@@ -1423,6 +1423,89 @@ async def delete_session(session_id: str, user_id: str = Query("")):
     return {"message": "Conversation deleted.", "deleted_messages": deleted}
 
 
+class RenameSessionRequest(BaseModel):
+    title: str
+
+
+@app.patch("/chat-sessions/{session_id}/rename")
+async def rename_session(session_id: str, body: RenameSessionRequest):
+    title = " ".join((body.title or "").split())[:120]
+
+    if not title:
+        raise HTTPException(status_code=400, detail="A title is required.")
+
+    with connect() as connection:
+        renamed = connection.execute(
+            "UPDATE sessions SET title = ? WHERE session_id = ? AND user_id = ?",
+            (title, session_id, owner_id()),
+        ).rowcount
+
+    if not renamed:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    return {"message": "Conversation renamed.", "session_id": session_id, "title": title}
+
+
+# -----------------------------
+# BILLING
+# -----------------------------
+# Pass-throughs to the engine, which owns accounts and talks to Razorpay. They
+# exist so the browser never needs the API key: the gateway adds it here, the
+# same way it does for questions.
+async def engine_billing(method: str, path: str, body: dict | None = None):
+    api_key = CONFIG["api_key"]
+
+    if not api_key:
+        raise HTTPException(status_code=503, detail="No engine API key is configured.")
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.request(
+                method,
+                f"{CONFIG['engine_url']}{path}",
+                json=body,
+                headers={"X-API-Key": api_key},
+            )
+    except httpx.RequestError as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Cannot reach the engine at {CONFIG['engine_url']}: {error}",
+        )
+
+    if response.status_code == 200:
+        return response.json()
+
+    try:
+        detail = response.json().get("detail", response.text)
+    except Exception:
+        detail = response.text
+
+    # The engine's status is passed through: a 400 for a bad signature or a
+    # 503 for unconfigured billing means the same thing to the UI either way.
+    raise HTTPException(status_code=response.status_code, detail=detail)
+
+
+class VerifyPaymentRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+@app.get("/billing/plan")
+async def billing_plan():
+    return await engine_billing("GET", "/v1/billing/plan")
+
+
+@app.post("/billing/create-order")
+async def billing_create_order():
+    return await engine_billing("POST", "/v1/billing/create-order")
+
+
+@app.post("/billing/verify-payment")
+async def billing_verify_payment(body: VerifyPaymentRequest):
+    return await engine_billing("POST", "/v1/billing/verify-payment", body.model_dump())
+
+
 # -----------------------------
 # VOICE
 # -----------------------------

@@ -11,6 +11,7 @@ import { api } from '@/services/api';
  * composer off the bottom of the screen as a conversation grows.
  */
 const ChatArea = ({
+  headerInset = false,
   sessionId,
   documents,
   selectedDocumentId,
@@ -92,7 +93,13 @@ const ChatArea = ({
     <section className="flex min-w-0 flex-1 flex-col">
       <InitBanner />
 
-      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+      {/* headerInset clears the layout's sidebar toggle once the sidebar is
+          collapsed and the toggle sits over this header instead. */}
+      <header
+        className={`flex items-center gap-3 border-b border-border py-3 pr-4 transition-[padding] duration-300 ease-in-out ${
+          headerInset ? 'md:pl-14' : ''
+        } pl-4`}
+      >
         <div className="relative flex min-w-0 items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-secondary-foreground">
           <FileText className="size-4 shrink-0 text-muted-foreground" />
 

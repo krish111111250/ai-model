@@ -417,6 +417,68 @@ export const api = {
     }
   },
 
+  // Billing goes through the gateway, which adds the engine API key; the
+  // browser never holds it.
+  getBillingPlan: async () => {
+    try {
+      const response = await client.get('/billing/plan');
+
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw {
+          status: error.response.status,
+          message: errorMessage(error.response.data, 'Could not read your plan.'),
+        };
+      }
+
+      throw {
+        status: 500,
+        message: 'Backend not reachable. Please check FastAPI server.',
+      };
+    }
+  },
+
+  createBillingOrder: async () => {
+    try {
+      const response = await client.post('/billing/create-order');
+
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw {
+          status: error.response.status,
+          message: errorMessage(error.response.data, 'Could not start checkout.'),
+        };
+      }
+
+      throw {
+        status: 500,
+        message: 'Backend not reachable. Please check FastAPI server.',
+      };
+    }
+  },
+
+  verifyBillingPayment: async (payment) => {
+    try {
+      const response = await client.post('/billing/verify-payment', payment);
+
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw {
+          status: error.response.status,
+          message: errorMessage(error.response.data, 'Payment could not be verified.'),
+        };
+      }
+
+      throw {
+        status: 500,
+        message: 'Backend not reachable. Please check FastAPI server.',
+      };
+    }
+  },
+
   getChatSessions: async () => {
     try {
       const response = await client.get('/chat-sessions');
@@ -447,6 +509,28 @@ export const api = {
         throw {
           status: error.response.status,
           message: errorMessage(error.response.data, 'Failed to load chat history.'),
+        };
+      }
+
+      throw {
+        status: 500,
+        message: 'Backend not reachable. Please check FastAPI server.',
+      };
+    }
+  },
+
+  renameChatSession: async (sessionId, title) => {
+    try {
+      const response = await client.patch(`/chat-sessions/${sessionId}/rename`, {
+        title,
+      });
+
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw {
+          status: error.response.status,
+          message: errorMessage(error.response.data, 'Conversation rename failed.'),
         };
       }
 
@@ -568,6 +652,26 @@ export const cloud = {
       }
 
       throw cloudError(error, 'Could not start checkout.');
+    }
+  },
+
+  // Razorpay, for the pricing page. The same engine endpoints the local app
+  // reaches through its gateway; here the session token is the credential.
+  createRazorpayOrder: async () => {
+    try {
+      const response = await cloudClient.post('/v1/billing/create-order');
+      return response.data;
+    } catch (error) {
+      throw cloudError(error, 'Could not start checkout.');
+    }
+  },
+
+  verifyRazorpayPayment: async (payment) => {
+    try {
+      const response = await cloudClient.post('/v1/billing/verify-payment', payment);
+      return response.data;
+    } catch (error) {
+      throw cloudError(error, 'Payment could not be verified.');
     }
   },
 

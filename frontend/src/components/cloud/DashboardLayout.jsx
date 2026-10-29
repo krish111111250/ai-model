@@ -1,45 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Activity, KeyRound, Loader2 } from 'lucide-react';
-import ApiKeyManager from '@/components/cloud/ApiKeyManager';
-import ApiPlayground from '@/components/cloud/ApiPlayground';
-import BillingManager from '@/components/cloud/BillingManager';
-import Skeleton from '@/components/ui/Skeleton';
-import DocumentManager from '@/components/cloud/DocumentManager';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import { clearAccount, useAccount } from '@/hooks/useAccount';
 import { cloud } from '@/services/api';
 
-const StatCard = ({ icon: Icon, label, value, note, loading }) => (
-  <div className="rounded-xl border border-border bg-card p-5">
-    <div className="flex items-center gap-2">
-      <Icon className="size-4 text-muted-foreground" />
-      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
-      </p>
-    </div>
-
-    {loading ? (
-      <>
-        {/* Sized like the figures they stand in for, so the card does not
-            change height when the numbers arrive. */}
-        <Skeleton className="mt-3 h-7 w-24" />
-        <Skeleton className="mt-2 h-3 w-36" />
-      </>
-    ) : (
-      <>
-        <p className="mt-3 text-2xl font-semibold tracking-tight">{value}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{note}</p>
-      </>
-    )}
-  </div>
-);
+// Active is a filled pill rather than a coloured underline: the theme has one
+// accent and the header already uses it for hover, so reusing it here keeps
+// the bar monochrome.
+const navClass = ({ isActive }) =>
+  [
+    'rounded-md px-3 py-1.5 text-sm transition-colors',
+    isActive
+      ? 'bg-accent text-foreground'
+      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+  ].join(' ');
 
 /**
- * The tenant dashboard: usage above, key management below.
+ * The shell both dashboard pages render inside: header, navigation, and the
+ * account state that has to outlive a page switch.
  *
- * Key state lives in ApiKeyManager, which is the only thing that changes it.
- * This passes a callback down and reads the same /v1/keys response for the
- * stat cards, so the two never disagree about how many keys exist.
+ * The workspace (documents, playground) and the account pages (usage,
+ * billing, keys) are separate routes instead of one long scroll. Key data
+ * lives here rather than in the settings page because Stripe returns the
+ * browser to /dashboard, not to /dashboard/settings - the plan refresh has to
+ * run from something that is mounted whichever page is showing. Pages read it
+ * through the outlet context.
  */
 const DashboardLayout = () => {
   const navigate = useNavigate();
@@ -49,7 +34,6 @@ const DashboardLayout = () => {
   const { account } = useAccount();
 
   const [summary, setSummary] = useState(null);
-  const [documents, setDocuments] = useState([]);
 
   // Bumped to make ApiKeyManager refetch. A counter rather than an imperative
   // handle on the child: the child already refetches when its deps change.
@@ -86,9 +70,10 @@ const DashboardLayout = () => {
 
     if (!checkout && !portal) return;
 
-    // Cleaned immediately, not after the wait: a reload mid-wait should not
-    // start the whole dance again.
-    window.history.replaceState(null, '', window.location.pathname);
+    // Stripe sends everyone to /dashboard, which is now the workspace. Put
+    // them back on the page they left from, and let the navigation drop the
+    // query string: a reload mid-wait should not start the whole dance again.
+    navigate('/dashboard/settings', { replace: true });
 
     if (checkout === 'cancelled') return;
 
@@ -138,55 +123,7 @@ const DashboardLayout = () => {
     return () => {
       cancelled = true;
     };
-  }, [handleKeyData]);
-
-  const stats = useMemo(() => {
-    const keys = summary?.keys || [];
-    const quota = summary?.quota;
-
-    const active = keys.filter((key) => !key.revoked_at).length;
-    const lifetime = keys.reduce(
-      (total, key) => total + (key.request_count || 0),
-      0
-    );
-
-    let usage;
-
-    if (!quota) {
-      usage = {
-        value: lifetime.toLocaleString(),
-        note: 'All time - this engine does not report monthly usage',
-      };
-    } else if (quota.unlimited || quota.limit === null) {
-      usage = {
-        value: `${quota.used.toLocaleString()} / ∞`,
-        note: 'Unlimited on this account',
-      };
-    } else {
-      const left = Math.max(0, quota.limit - quota.used);
-
-      usage = {
-        value: `${quota.used.toLocaleString()} / ${quota.limit}`,
-        note:
-          left === 0
-            ? 'Quota reached - requests are being refused'
-            : `${left} left this month`,
-      };
-    }
-
-    return [
-      { icon: Activity, label: 'Monthly usage', ...usage },
-      {
-        icon: KeyRound,
-        label: 'Active API keys',
-        value: String(active),
-        note:
-          keys.length === active
-            ? `${active} in use`
-            : `${active} in use, ${keys.length - active} revoked`,
-      },
-    ];
-  }, [summary]);
+  }, [handleKeyData, navigate]);
 
   const signOut = () => {
     cloud.logout();
@@ -197,10 +134,24 @@ const DashboardLayout = () => {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center gap-4 px-6 py-3.5">
+        {/* Wraps instead of overflowing: on a narrow screen the page links
+            drop onto a second line rather than pushing Logout off the edge. */}
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-6 py-3.5">
           <Link to="/" className="text-sm font-semibold tracking-tight">
             Krish AI
           </Link>
+
+          <nav className="flex items-center gap-1">
+            {/* `end` or the workspace link would stay lit on the settings
+                page, which is nested under its path. */}
+            <NavLink to="/dashboard" end className={navClass}>
+              Dashboard
+            </NavLink>
+
+            <NavLink to="/dashboard/settings" className={navClass}>
+              Settings
+            </NavLink>
+          </nav>
 
           <nav className="ml-auto flex items-center gap-1">
             <a
@@ -230,40 +181,16 @@ const DashboardLayout = () => {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-10">
-        <h1 className="text-xl font-semibold tracking-tight">Overview</h1>
-        <p className="mt-1.5 text-sm text-muted-foreground">
-          Usage across every key on this account.
-        </p>
-
-        {/* Says why the page is about to change by itself. */}
+        {/* Says why the page is about to change by itself. Above the outlet so
+            it is visible on whichever page the redirect landed on. */}
         {syncing && (
-          <p className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+          <p className="mb-6 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" />
             {syncing}
           </p>
         )}
 
-        <section className="mt-6 grid gap-4 sm:grid-cols-2">
-          {stats.map((stat) => (
-            <StatCard key={stat.label} {...stat} loading={!summary} />
-          ))}
-        </section>
-
-        <div className="mt-12 border-t border-border pt-12">
-          <BillingManager plan={summary?.plan} quota={summary?.quota} />
-        </div>
-
-        <div className="mt-12">
-          <ApiKeyManager onData={handleKeyData} refreshKey={refreshKey} />
-        </div>
-
-        <div className="mt-12 border-t border-border pt-12">
-          <DocumentManager onDocuments={setDocuments} />
-        </div>
-
-        <div className="mt-12 border-t border-border pt-12">
-          <ApiPlayground documents={documents} />
-        </div>
+        <Outlet context={{ summary, handleKeyData, refreshKey }} />
       </main>
     </div>
   );

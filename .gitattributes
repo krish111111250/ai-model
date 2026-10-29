@@ -1,0 +1,3 @@
+# Windows batch files need CRLF; cmd.exe mishandles labels in LF files.
+*.bat text eol=crlf
+*.sh  text eol=lf

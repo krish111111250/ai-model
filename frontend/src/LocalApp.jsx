@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { PanelLeft } from 'lucide-react';
 import ChatArea from '@/components/local/ChatArea';
 import LocalSidebar from '@/components/local/LocalSidebar';
 import SetupGate from '@/components/local/SetupGate';
@@ -17,6 +18,7 @@ const LocalApp = () => {
   const [documents, setDocuments] = useState([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState('');
   const [sessionId, setSessionId] = useState(() => `session_${Date.now()}`);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const loadDocuments = useCallback(async () => {
     try {
@@ -70,8 +72,23 @@ const LocalApp = () => {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+    <div className="relative flex h-screen overflow-hidden bg-background text-foreground">
+      {/* One toggle for both states, pinned to the corner: it sits over the
+          sidebar header when open and over the chat header when collapsed,
+          so it never moves under the cursor. */}
+      <button
+        type="button"
+        onClick={() => setIsSidebarOpen((open) => !open)}
+        aria-label={isSidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        aria-expanded={isSidebarOpen}
+        title={isSidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        className="absolute left-3 top-3 z-30 hidden size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground md:flex"
+      >
+        <PanelLeft className="size-4" />
+      </button>
+
       <LocalSidebar
+        isOpen={isSidebarOpen}
         documents={documents}
         selectedDocumentId={selectedDocumentId}
         onSelectDocument={setSelectedDocumentId}
@@ -80,6 +97,7 @@ const LocalApp = () => {
       />
 
       <ChatArea
+        headerInset={!isSidebarOpen}
         sessionId={sessionId}
         documents={documents}
         selectedDocumentId={selectedDocumentId}

@@ -1,14 +1,22 @@
-import { Link } from 'react-router-dom';
+import { lazy, Suspense, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
-  Ban,
   Check,
   Cpu,
   Database,
   FileText,
-  KeyRound,
   Search,
+  Server,
+  Workflow,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { updateAccount, useAccount } from '@/hooks/useAccount';
+import { loadRazorpay } from '@/lib/razorpay';
+import { cloud } from '@/services/api';
+
+// three.js is ~600KB; it loads only once the landing page renders this.
+const ArchitectureVisualizer = lazy(() => import('./ArchitectureVisualizer'));
 
 const LOCAL_PARTS = [
   {
@@ -28,21 +36,21 @@ const LOCAL_PARTS = [
   },
 ];
 
-const CLOUD_PARTS = [
+const LOCAL_ENGINE_PARTS = [
   {
     icon: Cpu,
-    title: 'Stateless LLM',
+    title: 'Ollama LLM Core',
+    detail: 'The language model runs on your CPU or GPU. No API calls out.',
+  },
+  {
+    icon: Server,
+    title: 'FastAPI Gateway',
+    detail: 'API key authentication and per-key rate limiting, on localhost.',
+  },
+  {
+    icon: Workflow,
+    title: 'LangChain Orchestration',
     detail: 'Turns your question and its snippets into a grounded answer.',
-  },
-  {
-    icon: KeyRound,
-    title: 'Keys and limits',
-    detail: 'API key authentication and per-key rate limiting.',
-  },
-  {
-    icon: Ban,
-    title: 'Keeps nothing',
-    detail: 'No documents, no vectors, no chat history. Only the key table.',
   },
 ];
 
@@ -71,8 +79,17 @@ const PLANS = [
     cta: 'Get started',
     to: '/login',
     featured: true,
+    // Bought through Razorpay rather than linked: see startCheckout.
+    checkout: true,
   },
 ];
+
+// Plans the engine treats as paid. Matches UNLIMITED_PLANS on the server;
+// the Enterprise card sells the engine's 'pro' plan.
+const PAID_PLANS = new Set(['pro']);
+
+// Matches the app's card surface, so the checkout header reads as ours.
+const CHECKOUT_THEME_COLOR = '#111111';
 
 const PartList = ({ parts }) => (
   <ul className="space-y-4">
@@ -91,6 +108,79 @@ const PartList = ({ parts }) => (
 );
 
 const LandingPage = () => {
+  const navigate = useNavigate();
+  const { account, signedIn } = useAccount();
+  const [checkingOut, setCheckingOut] = useState(false);
+
+  const onPaidPlan = PAID_PLANS.has(account?.plan);
+
+  // The engine fixes the amount on the order and grants the plan only after
+  // verifying Razorpay's signature; this page just opens checkout between
+  // the two.
+  const startCheckout = async () => {
+    if (!signedIn) {
+      navigate('/login');
+      return;
+    }
+
+    if (checkingOut || onPaidPlan) return;
+
+    setCheckingOut(true);
+
+    try {
+      const [Razorpay, order] = await Promise.all([
+        loadRazorpay(),
+        cloud.createRazorpayOrder(),
+      ]);
+
+      const checkout = new Razorpay({
+        key: order.key_id,
+        order_id: order.order_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'Krish AI',
+        description: 'Enterprise plan - 1 month',
+        prefill: { email: account?.email || '' },
+        theme: { color: CHECKOUT_THEME_COLOR },
+        handler: async (payment) => {
+          try {
+            const result = await cloud.verifyRazorpayPayment(payment);
+
+            updateAccount({ plan: result.plan });
+            toast.success('Payment received', {
+              description: 'Your account is upgraded. No monthly limit applies.',
+            });
+            navigate('/dashboard');
+          } catch (problem) {
+            console.error('Payment verification failed:', problem);
+            toast.error('Payment not confirmed', {
+              description:
+                problem.message ||
+                'If you were charged, the plan updates once Razorpay confirms it.',
+            });
+          } finally {
+            setCheckingOut(false);
+          }
+        },
+        modal: { ondismiss: () => setCheckingOut(false) },
+      });
+
+      // Checkout stays open on a failed attempt so the user can retry; this
+      // only says why it failed.
+      checkout.on('payment.failed', (response) => {
+        toast.error('Payment failed', {
+          description: response.error?.description || 'Try another method.',
+        });
+      });
+
+      checkout.open();
+    } catch (problem) {
+      console.error('Failed to start checkout:', problem);
+      toast.error('Could not start checkout', { description: problem.message });
+      setCheckingOut(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Temporary nav, kept at the top so the routes stay clickable. */}
@@ -131,10 +221,10 @@ const LandingPage = () => {
           </h1>
 
           <p className="mt-6 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-            Your documents are indexed and searched on your own machine. Only
-            your question and the few snippets that match it reach the cloud,
-            where a stateless model turns them into a grounded answer and keeps
-            nothing.
+            Your documents never leave your machine. Powered by local LLMs
+            (Ollama) and on-premise vector storage (Chroma), our RAG engine
+            processes everything completely offline. Zero cloud API calls, 100%
+            data privacy.
           </p>
 
           <div className="mt-9 flex flex-wrap items-center gap-3">
@@ -155,8 +245,22 @@ const LandingPage = () => {
           </div>
 
           <p className="mt-6 text-xs text-muted-foreground">
-            Runs on your hardware · No document storage on our servers
+            Runs entirely on your hardware · Zero external server dependencies
           </p>
+        </section>
+
+        {/* ---------- Pipeline visual ---------- */}
+        <section className="w-full max-w-5xl mx-auto my-16 px-4">
+          <h2 className="text-3xl font-bold text-white text-center mb-8">
+            How Our Air-Gapped Engine Works
+          </h2>
+          <Suspense
+            fallback={
+              <div className="h-96 w-full rounded-2xl bg-[#0a0a0a] border border-gray-800 animate-pulse" />
+            }
+          >
+            <ArchitectureVisualizer />
+          </Suspense>
         </section>
 
         {/* ---------- Architecture ---------- */}
@@ -166,8 +270,9 @@ const LandingPage = () => {
           </h2>
 
           <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            The split is the product. Everything that touches a document runs
-            locally; the cloud only generates.
+            Your host machine does all the heavy lifting. Documents, vector
+            embeddings, and LLM inference stay entirely on your secure local
+            environment.
           </p>
 
           <div className="mt-10 grid items-stretch gap-4 lg:grid-cols-[1fr_auto_1fr]">
@@ -182,16 +287,15 @@ const LandingPage = () => {
               <PartList parts={LOCAL_PARTS} />
             </div>
 
-            {/* The boundary, stated plainly: naming exactly what crosses it is
-                more convincing than a claim that nothing does. */}
+            {/* What passes between the two local processes, stated plainly. */}
             <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border px-5 py-6 lg:w-56">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Crosses the wire
+                Stays on localhost
               </p>
 
               <div className="w-full rounded-lg bg-secondary px-3 py-2 text-center">
                 <p className="text-xs font-medium text-foreground">
-                  Question + 4 snippets
+                  Question + 3 snippets
                 </p>
                 <ArrowRight className="mx-auto mt-1 size-3.5 text-muted-foreground" />
               </div>
@@ -204,19 +308,19 @@ const LandingPage = () => {
               </div>
 
               <p className="text-center text-[11px] leading-relaxed text-muted-foreground">
-                Never the file, the index, or your chat history.
+                Nothing leaves the machine: not the file, the index, or your chat history.
               </p>
             </div>
 
             <div className="rounded-xl border border-border bg-card p-6">
               <div className="mb-5 flex items-center justify-between">
-                <p className="text-sm font-semibold">Cloud</p>
+                <p className="text-sm font-semibold">Local AI Engine</p>
                 <span className="rounded-md bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
-                  stateless API
+                  localhost:8000
                 </span>
               </div>
 
-              <PartList parts={CLOUD_PARTS} />
+              <PartList parts={LOCAL_ENGINE_PARTS} />
             </div>
           </div>
         </section>
@@ -279,16 +383,35 @@ const LandingPage = () => {
                   ))}
                 </ul>
 
-                <Link
-                  to={plan.to}
-                  className={`mt-7 rounded-lg px-4 py-2.5 text-center text-sm font-medium transition-opacity hover:opacity-90 ${
-                    plan.featured
-                      ? 'bg-background text-foreground'
-                      : 'bg-primary text-primary-foreground'
-                  }`}
-                >
-                  {plan.cta}
-                </Link>
+                {plan.checkout ? (
+                  <button
+                    type="button"
+                    onClick={startCheckout}
+                    disabled={checkingOut || onPaidPlan}
+                    className={`mt-7 rounded-lg px-4 py-2.5 text-center text-sm font-medium transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-60 disabled:hover:opacity-60 ${
+                      plan.featured
+                        ? 'bg-background text-foreground'
+                        : 'bg-primary text-primary-foreground'
+                    }`}
+                  >
+                    {onPaidPlan
+                      ? 'Current Plan'
+                      : checkingOut
+                        ? 'Opening checkout...'
+                        : plan.cta}
+                  </button>
+                ) : (
+                  <Link
+                    to={plan.to}
+                    className={`mt-7 rounded-lg px-4 py-2.5 text-center text-sm font-medium transition-opacity hover:opacity-90 ${
+                      plan.featured
+                        ? 'bg-background text-foreground'
+                        : 'bg-primary text-primary-foreground'
+                    }`}
+                  >
+                    {plan.cta}
+                  </Link>
+                )}
               </div>
             ))}
           </div>

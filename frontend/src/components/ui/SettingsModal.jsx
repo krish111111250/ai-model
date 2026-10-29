@@ -93,11 +93,13 @@ const SettingsModal = ({ isOpen, onClose, onSaved }) => {
         <input
           ref={input}
           id="api-key"
+          name="engine-api-key-hidden"
           type="password"
           value={apiKey}
           onChange={(event) => setApiKey(event.target.value)}
           placeholder="krish_..."
-          autoComplete="off"
+          autoComplete="new-password"
+          spellCheck="false"
           disabled={saving}
           className="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring disabled:opacity-60"
         />

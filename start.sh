@@ -1,9 +1,18 @@
 #!/bin/bash
-# Start Krish AI: Ollama, MongoDB, FastAPI backend, Vite frontend.
+# Start Krish AI: Ollama, MongoDB, FastAPI backend, local gateway, frontend.
 # Every service is detached, so it keeps running after this terminal (or a
 # Claude Code session) closes. Logs go to ./logs. Stop everything with ./stop.sh
+#
+#   ./start.sh         production: the engine serves the built frontend
+#                      (frontend/dist, made by ./install.sh) on port 8000
+#   ./start.sh --dev   development: Vite on port 5173, with hot reload
+#
+# Without a build, production falls back to Vite so the app still opens.
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+
+DEV=0
+[ "${1:-}" = "--dev" ] && DEV=1
 LOGS="$ROOT/logs"
 MONGO_DBPATH="${MONGO_DBPATH:-$HOME/mongodb-data}"
 
@@ -107,12 +116,20 @@ else
   wait_for_port 8001 Gateway
 fi
 
-echo "5/5 Frontend (Vite)"
-if port_busy 5173; then
-  echo "   already running"
+if [ "$DEV" = 0 ] && [ -f "$ROOT/frontend/dist/index.html" ]; then
+  echo "5/5 Frontend (built, served by the engine)"
+  echo "   frontend/dist - rebuild with ./install.sh after changing the UI"
+  APP_URL="http://localhost:8000"
 else
-  start_detached frontend "$ROOT/frontend" npm run dev
-  wait_for_port 5173 Frontend
+  echo "5/5 Frontend (Vite dev server)"
+  [ "$DEV" = 0 ] && echo "   no build in frontend/dist - run ./install.sh for production"
+  if port_busy 5173; then
+    echo "   already running"
+  else
+    start_detached frontend "$ROOT/frontend" npm run dev
+    wait_for_port 5173 Frontend
+  fi
+  APP_URL="http://localhost:5173"
 fi
 
 # Load the model now so the first question is fast.
@@ -124,7 +141,7 @@ curl -s http://localhost:11434/api/generate \
   >/dev/null 2>&1 && echo "   model loaded" || echo "   ⚠️  warm-up failed - check logs/ollama.log"
 
 echo ""
-echo "✅ Krish AI is running:  http://localhost:5173"
+echo "✅ Krish AI is running locally at $APP_URL"
 echo "   Gateway (your documents): http://localhost:8001  <- the UI talks to this"
 echo "   Engine  (answers only):   http://localhost:8000"
 echo "   Logs: $LOGS"

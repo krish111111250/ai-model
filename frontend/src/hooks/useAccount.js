@@ -30,6 +30,14 @@ const fetchAccount = () => {
   return inFlight;
 };
 
+/**
+ * Merge a change into the cached account - a plan bought on the pricing page,
+ * say - so the next page to mount shows it without refetching /v1/auth/me.
+ */
+export const updateAccount = (changes) => {
+  if (cached) cached = { ...cached, ...changes };
+};
+
 /** Drop the cache on sign-out, so the next sign-in does not inherit it. */
 export const clearAccount = () => {
   cached = null;
